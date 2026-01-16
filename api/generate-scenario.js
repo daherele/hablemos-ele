@@ -1,5 +1,96 @@
 // api/generate-scenario.js
 
+function safeParseJSON(text) {
+  const raw = String(text || "").trim();
+
+  // Quitar fences ```json ... ```
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const s = (fenceMatch?.[1] ? fenceMatch[1] : raw).trim();
+
+  // Intento directo
+  try {
+    return { ok: true, value: JSON.parse(s), cleaned: s };
+  } catch {}
+
+  // Intento: extraer primer objeto balanceando llaves
+  let start = -1;
+  let depth = 0;
+
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "{") {
+      if (start === -1) start = i;
+      depth++;
+    } else if (ch === "}") {
+      if (start !== -1) depth--;
+      if (start !== -1 && depth === 0) {
+        const candidate = s.slice(start, i + 1).trim();
+        try {
+          return { ok: true, value: JSON.parse(candidate), cleaned: candidate };
+        } catch {
+          start = -1;
+          depth = 0;
+        }
+      }
+    }
+  }
+
+  return { ok: false, cleaned: s };
+}
+
+async function callGemini({ apiKey, level, context, temperature }) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+
+  const prompt = `
+Devuelve SOLO JSON válido (sin texto extra, sin explicaciones, sin backticks).
+
+Estructura exacta:
+{
+  "title": "",
+  "description": "",
+  "level": "${level}",
+  "context": "${context}",
+  "roles": { "user": "", "ai": "" },
+  "objectives": [],
+  "starter": ""
+}
+
+Reglas:
+- Situación cotidiana y realista para ELE.
+- Nivel ${level}.
+- objectives: 3 a 8 strings.
+- starter: una primera frase del interlocutor (AI) para iniciar la conversación.
+`.trim();
+
+  const payload = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature,
+      maxOutputTokens: 900,
+      responseMimeType: "application/json" // ✅ esto sí (responseSchema NO)
+    }
+  };
+
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await r.json().catch(() => null);
+
+  if (!r.ok) {
+    return {
+      ok: false,
+      error: data?.error?.message || `HTTP ${r.status}`,
+      raw: data
+    };
+  }
+
+  const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+  return { ok: true, text };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -14,97 +105,56 @@ export default async function handler(req, res) {
 
     const { level = "A1", context = "general" } = req.body || {};
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+    // 1) Primer intento (normal)
+    const first = await callGemini({ apiKey, level, context, temperature: 0.7 });
+    if (!first.ok) {
+      return res.status(500).json({ error: "No se pudo generar el escenario", details: first.error });
+    }
 
-    // Prompt simple: el control real lo da responseMimeType + schema
-    const prompt = `
-Genera UN escenario de práctica comunicativa para estudiantes de español nivel ${level}.
-Contexto: ${context}.
-Devuelve los campos del esquema JSON.
-`.trim();
+    let parsed = safeParseJSON(first.text);
 
-    const payload = {
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 900, // suficiente para objetivos+starter
-        responseMimeType: "application/json"
-      },
-      // Schema (muy recomendado): obliga a que venga completo y bien formado
-      responseSchema: {
-        type: "object",
-        required: ["title", "description", "level", "context", "roles", "objectives", "starter"],
-        properties: {
-          title: { type: "string" },
-          description: { type: "string" },
-          level: { type: "string" },
-          context: { type: "string" },
-          roles: {
-            type: "object",
-            required: ["user", "ai"],
-            properties: {
-              user: { type: "string" },
-              ai: { type: "string" }
-            }
-          },
-          objectives: {
-            type: "array",
-            items: { type: "string" },
-            minItems: 3,
-            maxItems: 8
-          },
-          starter: { type: "string" }
-        }
+    // 2) Si falla por truncado o texto raro, reintenta con temperatura baja
+    if (!parsed.ok) {
+      const second = await callGemini({ apiKey, level, context, temperature: 0.2 });
+      if (!second.ok) {
+        return res.status(500).json({
+          error: "Gemini no devolvió JSON válido",
+          details: parsed.cleaned.slice(0, 2000)
+        });
       }
-    };
+      parsed = safeParseJSON(second.text);
+    }
 
-    const r = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    const data = await r.json().catch(() => null);
-
-    if (!r.ok) {
+    // 3) Si sigue fallando, devolvemos details largo para depurar
+    if (!parsed.ok) {
       return res.status(500).json({
-        error: "No se pudo generar el escenario",
-        details: data?.error?.message || `HTTP ${r.status}`
+        error: "Gemini no devolvió JSON válido",
+        details: parsed.cleaned.slice(0, 2000)
       });
     }
 
-    // Con responseMimeType=application/json, normalmente viene en candidates[0].content.parts[0].text como JSON válido.
-    const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+    const scenario = parsed.value || {};
 
-    let scenario;
-    try {
-      scenario = JSON.parse(text);
-    } catch (e) {
-      return res.status(500).json({
-        error: "Gemini devolvió JSON no parseable",
-        details: text.slice(0, 2000)
-      });
-    }
-
-    // Normalización mínima por si acaso
+    // Normalización mínima (para que el frontend no rompa)
+    scenario.title = String(scenario.title || "").trim() || `Situación: ${context}`;
+    scenario.description = String(scenario.description || "").trim() || "Escenario generado con IA.";
     scenario.level = scenario.level || level;
     scenario.context = scenario.context || context;
 
-    if (!scenario.roles || typeof scenario.roles !== "object") {
-      scenario.roles = { user: "Alumno/a", ai: "Interlocutor" };
-    } else {
-      scenario.roles.user = scenario.roles.user || "Alumno/a";
-      scenario.roles.ai = scenario.roles.ai || "Interlocutor";
-    }
+    scenario.roles =
+      scenario.roles && typeof scenario.roles === "object"
+        ? scenario.roles
+        : { user: "Alumno/a", ai: "Interlocutor" };
 
-    if (!Array.isArray(scenario.objectives)) scenario.objectives = [];
+    scenario.roles.user = scenario.roles.user || "Alumno/a";
+    scenario.roles.ai = scenario.roles.ai || "Interlocutor";
+
+    scenario.objectives = Array.isArray(scenario.objectives) ? scenario.objectives : [];
     scenario.objectives = scenario.objectives
       .map((x) => String(x || "").trim())
       .filter(Boolean)
       .slice(0, 8);
 
-    scenario.title = String(scenario.title || "").trim() || `Situación: ${context}`;
-    scenario.description = String(scenario.description || "").trim() || "Escenario generado con IA.";
     scenario.starter = String(scenario.starter || "").trim() || "¡Hola! ¿En qué puedo ayudarte?";
 
     return res.status(200).json(scenario);
