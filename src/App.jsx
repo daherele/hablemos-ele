@@ -459,9 +459,30 @@ export default function App() {
     return await callGeminiCorrection(text, selectedLevelId);
   };
 
-  const handleVocabSelect = (word) => {
-    setInputText(prev => prev + (prev ? ' ' : '') + word);
-  };
+const handleCorrectionRequest = async (text) => {
+  const { corrected, explanation } = await callGeminiCorrection(text, selectedLevelId);
+
+  // Si no hay corrección, devolvemos algo para que al menos no quede vacío
+  if (!corrected) {
+    return explanation || "No pude corregir ahora mismo.";
+  }
+
+  // Reemplaza el ÚLTIMO mensaje del usuario por la versión corregida
+  setMessages((prev) => {
+    const copy = [...prev];
+    for (let i = copy.length - 1; i >= 0; i--) {
+      if (copy[i]?.sender === "user") {
+        copy[i] = { ...copy[i], text: corrected };
+        break;
+      }
+    }
+    return copy;
+  });
+
+  // Feedback breve (opcional). Si quieres cero feedback, pon: return null;
+  return explanation ? `💡 ${explanation}` : null;
+};
+
 
   const handleCreateScenario = async (e) => {
     e.preventDefault();
