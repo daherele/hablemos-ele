@@ -39,7 +39,8 @@ const generateMockReply = (input, contextId) => {
   return {
     reply: `(Demo) ${reply}`,
     objective_updates: updates,
-    follow_up_question: "¿Y qué tal tu familia?"
+    follow_up_question: "¿Y qué tal tu familia?",
+    completed_objective_ids: updates.map(update => update.id)
   };
 };
 
@@ -64,6 +65,33 @@ async function postJSON(path, payload) {
 }
 
 // ✅ Chat vía backend
+const parseReplyPayload = (rawData) => {
+  let candidate = null;
+
+  if (typeof rawData?.reply === "string") {
+    candidate = rawData.reply;
+  } else if (typeof rawData === "string") {
+    candidate = rawData;
+  }
+
+  if (typeof candidate === "string") {
+    const trimmed = candidate.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (typeof parsed?.reply === "string") {
+          return parsed.reply;
+        }
+      } catch {
+        // dejamos el string tal cual si no se puede parsear
+      }
+    }
+    return candidate;
+  }
+
+  return null;
+};
+
 const callGeminiChat = async (history, scenario, level, userMessage, currentObjectives) => {
   try {
     // Enviamos solo los últimos mensajes para ahorrar coste
@@ -77,15 +105,24 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
       currentObjectives
     });
 
-    // Validación mínima para no romper UI
+    const reply = parseReplyPayload(data);
+    const completedObjectiveIds = Array.isArray(data?.completed_objective_ids)
+      ? data.completed_objective_ids
+      : Array.isArray(data?.objective_updates)
+        ? data.objective_updates.map(update => update.id)
+        : [];
+
     return {
-      reply: typeof data?.reply === "string" ? data.reply : "No pude generar respuesta.",
-      objective_updates: Array.isArray(data?.objective_updates) ? data.objective_updates : [],
-      follow_up_question: typeof data?.follow_up_question === "string" ? data.follow_up_question : ""
+      reply,
+      completedObjectiveIds
     };
   } catch (err) {
     console.warn("Backend /api/chat falló, usando modo demo:", err);
-    return generateMockReply(userMessage, scenario?.id);
+    const fallback = generateMockReply(userMessage, scenario?.id);
+    return {
+      reply: fallback.reply,
+      completedObjectiveIds: Array.isArray(fallback.completed_objective_ids) ? fallback.completed_objective_ids : []
+    };
   }
 };
 
@@ -343,6 +380,7 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
   const [currentObjectives, setCurrentObjectives] = useState([]);
+  const [isSending, setIsSending] = useState(false);
 
   // Create Scenario State (desactivado por seguridad hasta backend)
   const [isCreatingScenario, setIsCreatingScenario] = useState(false);
@@ -350,6 +388,7 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
 
   const messagesEndRef = useRef(null);
+  const isSendingRef = useRef(false);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -392,7 +431,9 @@ export default function App() {
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || isSendingRef.current) return;
+    isSendingRef.current = true;
+    setIsSending(true);
 
     // snapshot del historial antes de añadir el nuevo mensaje
     const historySnapshot = messages;
@@ -412,28 +453,29 @@ export default function App() {
         currentObjectives
       );
 
-      if (responseData.objective_updates && responseData.objective_updates.length > 0) {
-        setCurrentObjectives(prev => prev.map(obj => {
-          const update = responseData.objective_updates.find(u => u.id === obj.id);
-          if (update && obj.status !== 'confirmed') {
-            return {
-              ...obj,
-              status: 'possible',
-              evidence: update.evidence || '',
-              reason: update.reason || ''
-            };
-          }
-          return obj;
-        }));
+      if (responseData.completedObjectiveIds.length > 0) {
+        setCurrentObjectives(prev => prev.map(obj => (
+          responseData.completedObjectiveIds.includes(obj.id)
+            ? { ...obj, status: 'confirmed' }
+            : obj
+        )));
       }
 
-      const botMsg = { id: Date.now() + 1, sender: 'bot', text: responseData.reply };
+      const replyText = responseData.reply;
+      const botMsgText = typeof replyText === 'string'
+        ? replyText
+        : 'Perdón, ¿qué quieres hacer ahora?';
+      const botMsg = { id: Date.now() + 1, sender: 'bot', text: botMsgText };
       setMessages(prev => [...prev, botMsg]);
     } catch (err) {
       console.error(err);
       setErrorMsg("Error de conexión.");
+      const botMsg = { id: Date.now() + 1, sender: 'bot', text: 'Perdón, ¿qué quieres hacer ahora?' };
+      setMessages(prev => [...prev, botMsg]);
     } finally {
       setIsTyping(false);
+      setIsSending(false);
+      isSendingRef.current = false;
     }
   };
 
@@ -644,7 +686,7 @@ export default function App() {
             />
             <button
               type="submit"
-              disabled={!inputText.trim() || isTyping}
+              disabled={!inputText.trim() || isTyping || isSending}
               className="p-3 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
             >
               <Send size={18} />
@@ -711,4 +753,3 @@ export default function App() {
     </div>
   );
 }
-
