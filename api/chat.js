@@ -99,21 +99,22 @@ function extractJsonString(textRaw) {
   }
 }
 
+// ✅ Versión "suave": NO marca como malo un español corto.
+// Solo bloquea: vacío, inglés típico, o basura.
 function isBadReply(reply) {
   let r = String(reply || "");
   r = r.replace(/[\u200B-\u200D\uFEFF]/g, "").trim(); // invisibles
 
-  // vacío
   if (!r) return true;
 
-  // demasiado corto (permitimos sí/no/ok)
-  if (r.length < 3 && !/^(sí|no|ok)$/i.test(r)) return true;
-
-  // "Here" como palabra
+  // Inglés típico (solo palabra completa)
   if (/\bhere\b/i.test(r)) return true;
-
-  // señales típicas de inglés
   if (/\b(sure|okay|yes)\b/i.test(r)) return true;
+
+  // Basura / ruido: solo signos o tokens típicos
+  const onlyLetters = r.replace(/[¿?¡!.,;:"'()\[\]{}\-]/g, "").trim();
+  if (!onlyLetters) return true; // solo signos
+  if (/^(asdf|qwer|xxxx|test)$/i.test(onlyLetters)) return true;
 
   return false;
 }
@@ -182,6 +183,16 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing userMessage" });
     }
 
+    // ✅ Normaliza SIEMPRE userMessage (invisibles, espacios, etc.)
+    let normalizedUserMessage = String(userMessage)
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!normalizedUserMessage) {
+      return res.status(200).json({ reply: "Perdón, ¿puedes repetirlo?", completed_objective_ids: [] });
+    }
+
     // Respuesta final única (cortafuegos)
     function finalize(reply, ids = []) {
       let r = String(reply || "");
@@ -193,7 +204,7 @@ export default async function handler(req, res) {
       }
 
       // Marca para verificar deploy (puedes quitarla luego)
-      res.setHeader("x-chat-version", "recovery-v1");
+      res.setHeader("x-chat-version", "recovery-v2");
 
       return res.status(200).json({ reply: r, completed_objective_ids: ids });
     }
@@ -250,6 +261,7 @@ REGLAS GENERALES:
 - Mantén el rol del escenario (persona real, no profesor), PERO respeta estrictamente las reglas del nivel.
 - NO expliques gramática ni evalúes.
 - Interpreta con buena fe.
+- Si el alumno responde con 1–3 palabras (ej.: "y yo", "yo también", "sí"), interprétalo como respuesta elíptica y continúa. NO digas "¿puedes repetirlo?".
 
 LÍMITE DE FRASES:
 - Si HAY reformulación: máximo ${sentenceLimits.withReformulation} frase(s).
@@ -276,7 +288,6 @@ ININTELIGIBLE (muy estricto):
 - Solo considera ininteligible si el texto NO está en español (p.ej., inglés) o es puro ruido (p.ej., "asdf", "....").
 - Una frase corta ("y yo", "yo también", "sí") NO es ininteligible.
 - Si es ininteligible, di: "Perdón, no te entiendo. ¿Puedes decirlo de otra forma?"
-
 
 FORMATO (OBLIGATORIO):
 Devuelve SOLO un JSON válido con las claves:
@@ -311,7 +322,7 @@ Reglas (RECOVERY):
         role: msg.sender === "user" ? "user" : "model",
         parts: [{ text: msg.text }]
       })),
-      { role: "user", parts: [{ text: userMessage }] }
+      { role: "user", parts: [{ text: normalizedUserMessage }] }
     ];
 
     async function callGemini({ strict = false, overrideContents = null, overridePrompt = null } = {}) {
@@ -392,13 +403,10 @@ Reglas (RECOVERY):
     // 1) Intento normal
     const out1 = await callGemini({ strict: false });
     if (!out1.ok) {
-      // error real de API
       return res.status(out1.status).json({ error: "Gemini API error", details: out1.data });
     }
 
     const norm1 = await parseGeminiOutput(out1);
-
-    // Si salió bien, devolvemos
     if (norm1 && !norm1._badReply) {
       return finalize(norm1.reply, norm1.completed_objective_ids);
     }
@@ -413,7 +421,7 @@ Reglas (RECOVERY):
     }
 
     // 3) Recovery: strict + prompt corto + SIN historial (reset)
-    const contentsReset = [{ role: "user", parts: [{ text: userMessage }] }];
+    const contentsReset = [{ role: "user", parts: [{ text: normalizedUserMessage }] }];
     const out3 = await callGemini({
       strict: true,
       overrideContents: contentsReset,
