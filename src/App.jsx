@@ -1,9 +1,21 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
-  MessageCircle, BookOpen, Send, ArrowLeft, X,
-  User, Bot, Sparkles, Volume2, Wand2, Loader2,
-  Home, ZapOff, Plus, Target
-} from 'lucide-react';
+  MessageCircle,
+  BookOpen,
+  Send,
+  ArrowLeft,
+  X,
+  User,
+  Bot,
+  Sparkles,
+  Volume2,
+  Wand2,
+  Loader2,
+  Home,
+  ZapOff,
+  Plus,
+  Target
+} from "lucide-react";
 
 /**
  * ✅ Frontend seguro:
@@ -12,7 +24,7 @@ import {
  */
 
 // --- MOCK AI LOGIC (FALLBACK) ---
-const generateMockReply = (input) => {
+const generateMockReply = () => {
   const responses = ["¡Hola! ¿Cómo estás?", "Entiendo, cuéntame más.", "Muy bien."];
   const reply = responses[Math.floor(Math.random() * responses.length)];
   return { reply: `(Demo) ${reply}` };
@@ -23,7 +35,7 @@ async function postJSON(path, payload) {
   const res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(payload)
   });
 
   let data = null;
@@ -54,11 +66,13 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
 
     return {
       reply: typeof data?.reply === "string" ? data.reply : "No pude generar respuesta.",
-      completed_objective_ids: Array.isArray(data?.completed_objective_ids) ? data.completed_objective_ids : [],
+      completed_objective_ids: Array.isArray(data?.completed_objective_ids)
+        ? data.completed_objective_ids
+        : []
     };
   } catch (err) {
     console.warn("Backend /api/chat falló, usando modo demo:", err);
-    const demo = generateMockReply(userMessage);
+    const demo = generateMockReply();
     return { reply: demo.reply, completed_objective_ids: [] };
   }
 };
@@ -73,54 +87,85 @@ const callGeminiCorrection = async (text, level) => {
 };
 
 // 🚫 TTS desactivado por ahora
-const callGeminiTTS = async () => { return; };
+const callGeminiTTS = async () => {
+  return;
+};
 
 // --- INITIAL DATA ---
 const LEVELS = [
-  { id: 'A1', label: 'A1 - Acceso', description: 'Vocabulario básico y frases sencillas.', color: 'bg-green-100 text-green-800 border-green-200' },
-  { id: 'A2', label: 'A2 - Plataforma', description: 'Descripciones y tareas rutinarias.', color: 'bg-green-200 text-green-900 border-green-300' },
-  { id: 'B1', label: 'B1 - Umbral', description: 'Situaciones imprevistas y opiniones.', color: 'bg-blue-100 text-blue-800 border-blue-200' },
-  { id: 'B2', label: 'B2 - Avanzado', description: 'Conversación fluida y técnica.', color: 'bg-blue-200 text-blue-900 border-blue-300' },
-  { id: 'C1', label: 'C1 - Dominio', description: 'Contextos complejos y profesionales.', color: 'bg-purple-100 text-purple-800 border-purple-200' },
+  {
+    id: "A1",
+    label: "A1 - Acceso",
+    description: "Vocabulario básico y frases sencillas.",
+    color: "bg-green-100 text-green-800 border-green-200"
+  },
+  {
+    id: "A2",
+    label: "A2 - Plataforma",
+    description: "Descripciones y tareas rutinarias.",
+    color: "bg-green-200 text-green-900 border-green-300"
+  },
+  {
+    id: "B1",
+    label: "B1 - Umbral",
+    description: "Situaciones imprevistas y opiniones.",
+    color: "bg-blue-100 text-blue-800 border-blue-200"
+  },
+  {
+    id: "B2",
+    label: "B2 - Avanzado",
+    description: "Conversación fluida y técnica.",
+    color: "bg-blue-200 text-blue-900 border-blue-300"
+  },
+  {
+    id: "C1",
+    label: "C1 - Dominio",
+    description: "Contextos complejos y profesionales.",
+    color: "bg-purple-100 text-purple-800 border-purple-200"
+  }
 ];
 
 const INITIAL_SCENARIOS = [
   {
-    id: 'friend_house',
-    title: 'Visita a una Amiga',
-    difficulty: ['A1', 'A2'],
+    id: "friend_house",
+    title: "Visita a una Amiga",
+    difficulty: ["A1", "A2"],
     icon: <Home className="w-6 h-6" />,
-    description: 'Practica saludos informales y etiqueta básica de visita.',
-    color: 'bg-rose-400',
+    description: "Practica saludos informales y etiqueta básica de visita.",
+    color: "bg-rose-400",
     objectives: [
-      { id: 'obj_greet', text: 'Saludar adecuadamente a tu amiga' },
-      { id: 'obj_drink', text: 'Aceptar o rechazar una bebida' },
-      { id: 'obj_compliment', text: 'Hacer un cumplido sobre la casa' },
-      { id: 'obj_farewell', text: 'Despedirse al marcharte' }
+      { id: "obj_greet", text: "Saludar adecuadamente a tu amiga" },
+      { id: "obj_drink", text: "Aceptar o rechazar una bebida" },
+      { id: "obj_compliment", text: "Hacer un cumplido sobre la casa" },
+      { id: "obj_farewell", text: "Despedirse al marcharte" }
     ],
     vocab: [
-      { word: '¡Hola! ¿Qué tal?', type: 'phrase', translation: 'Hello! How are you?' },
-      { word: 'Pasa, pasa', type: 'phrase', translation: 'Come in, come in' },
-      { word: '¡Qué casa tan bonita!', type: 'phrase', translation: 'What a beautiful house!' },
-      { word: 'Sí, un poco de agua por favor', type: 'phrase', translation: 'Yes, some water please' },
-      { word: 'Me tengo que ir', type: 'phrase', translation: 'I have to go' },
+      { word: "¡Hola! ¿Qué tal?", type: "phrase", translation: "Hello! How are you?" },
+      { word: "Pasa, pasa", type: "phrase", translation: "Come in, come in" },
+      { word: "¡Qué casa tan bonita!", type: "phrase", translation: "What a beautiful house!" },
+      {
+        word: "Sí, un poco de agua por favor",
+        type: "phrase",
+        translation: "Yes, some water please"
+      },
+      { word: "Me tengo que ir", type: "phrase", translation: "I have to go" }
     ],
     botPersona: {
-      name: 'María (Amiga)',
+      name: "María (Amiga)",
       initialMessage: {
-        A1: '¡Hola! ¡Qué bien que has venido! Pasa, por favor.',
-        A2: '¡Hola! Cuánto tiempo. Deja tu abrigo ahí. ¿Qué tal el viaje?',
-        default: '¡Hola! Bienvenida a mi casa.'
+        A1: "¡Hola! ¡Qué bien que has venido! Pasa, por favor.",
+        A2: "¡Hola! Cuánto tiempo. Deja tu abrigo ahí. ¿Qué tal el viaje?",
+        default: "¡Hola! Bienvenida a mi casa."
       }
     }
-  },
+  }
 ];
 
 // --- COMPONENTS ---
 const SafeRender = ({ content }) => {
   if (content === null || content === undefined) return null;
-  if (typeof content === 'string' || typeof content === 'number') return content;
-  if (typeof content === 'object') return JSON.stringify(content);
+  if (typeof content === "string" || typeof content === "number") return content;
+  if (typeof content === "object") return JSON.stringify(content);
   return null;
 };
 
@@ -139,7 +184,7 @@ const ChatMessage = ({ message, isUser, onCorrect, isLastUser }) => {
   const handleCorrection = async () => {
     setIsCorrecting(true);
     try {
-      const resultText = await onCorrect(message); // ⬅️ ahora pasamos el mensaje entero
+      const resultText = await onCorrect(message); // pasamos el mensaje entero
       setFeedback(resultText);
     } finally {
       setIsCorrecting(false);
@@ -147,18 +192,24 @@ const ChatMessage = ({ message, isUser, onCorrect, isLastUser }) => {
   };
 
   return (
-    <div className={`flex w-full mb-6 ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`flex flex-col max-w-[85%] md:max-w-[75%] ${isUser ? 'items-end' : 'items-start'}`}>
-        <div className={`flex ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-          <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${isUser ? 'ml-2 bg-indigo-600' : 'mr-2 bg-gray-200'}`}>
+    <div className={`flex w-full mb-6 ${isUser ? "justify-end" : "justify-start"}`}>
+      <div className={`flex flex-col max-w-[85%] md:max-w-[75%] ${isUser ? "items-end" : "items-start"}`}>
+        <div className={`flex ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+          <div
+            className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+              isUser ? "ml-2 bg-indigo-600" : "mr-2 bg-gray-200"
+            }`}
+          >
             {isUser ? <User size={16} className="text-white" /> : <Bot size={16} className="text-gray-600" />}
           </div>
 
-          <div className={`p-3 rounded-2xl text-sm md:text-base shadow-sm relative group ${
-            isUser
-              ? 'bg-indigo-600 text-white rounded-tr-none'
-              : 'bg-white border border-gray-100 text-gray-800 rounded-tl-none'
-          }`}>
+          <div
+            className={`p-3 rounded-2xl text-sm md:text-base shadow-sm relative group ${
+              isUser
+                ? "bg-indigo-600 text-white rounded-tr-none"
+                : "bg-white border border-gray-100 text-gray-800 rounded-tl-none"
+            }`}
+          >
             <SafeRender content={message.text} />
 
             {/* ✅ Mostrar corrección inline debajo del texto del alumno (sin reemplazarlo) */}
@@ -171,7 +222,7 @@ const ChatMessage = ({ message, isUser, onCorrect, isLastUser }) => {
           </div>
         </div>
 
-        <div className={`flex items-center gap-2 mt-1 px-1 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+        <div className={`flex items-center gap-2 mt-1 px-1 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
           {!isUser && (
             <button
               onClick={handlePlay}
@@ -200,7 +251,9 @@ const ChatMessage = ({ message, isUser, onCorrect, isLastUser }) => {
         {feedback && (
           <div className="mt-2 bg-yellow-50 border border-yellow-200 rounded-lg p-2 text-xs text-yellow-800 max-w-full animate-fade-in flex gap-2 items-start">
             <Sparkles size={14} className="mt-0.5 shrink-0 text-yellow-600" />
-            <div><SafeRender content={feedback} /></div>
+            <div>
+              <SafeRender content={feedback} />
+            </div>
           </div>
         )}
       </div>
@@ -231,39 +284,32 @@ const LevelBadge = ({ level, selected, onClick }) => (
   <button
     onClick={onClick}
     className={`px-3 py-1.5 md:px-4 md:py-2 rounded-lg text-xs md:text-sm font-medium border transition-all whitespace-nowrap ${
-      selected ? 'ring-2 ring-indigo-500 ring-offset-1 shadow-sm scale-105' : 'opacity-70 hover:opacity-100'
+      selected ? "ring-2 ring-indigo-500 ring-offset-1 shadow-sm scale-105" : "opacity-70 hover:opacity-100"
     } ${level.color}`}
   >
     {level.label}
   </button>
 );
 
-// Objetivos (ahora: auto + manual)
+// Objetivos (auto + manual)
 const ObjectiveItem = ({ objective, onToggle }) => {
   const { text, completed } = objective;
 
   return (
     <label className="flex items-start gap-3 p-3 rounded-lg border bg-white border-gray-200 cursor-pointer hover:bg-gray-50">
-      <input
-        type="checkbox"
-        checked={completed}
-        onChange={onToggle}
-        className="mt-1 accent-indigo-600"
-      />
-      <span className={`text-sm ${completed ? 'line-through text-green-700' : 'text-gray-800'}`}>
-        {text}
-      </span>
+      <input type="checkbox" checked={completed} onChange={onToggle} className="mt-1 accent-indigo-600" />
+      <span className={`text-sm ${completed ? "line-through text-green-700" : "text-gray-800"}`}>{text}</span>
     </label>
   );
 };
 
 export default function App() {
-  const [screen, setScreen] = useState('home');
+  const [screen, setScreen] = useState("home");
   const [selectedScenario, setSelectedScenario] = useState(null);
-  const [selectedLevelId, setSelectedLevelId] = useState('A1');
+  const [selectedLevelId, setSelectedLevelId] = useState("A1");
   const [scenarios] = useState(INITIAL_SCENARIOS);
   const [messages, setMessages] = useState([]);
-  const [inputText, setInputText] = useState('');
+  const [inputText, setInputText] = useState("");
   const [isVocabOpen, setIsVocabOpen] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
@@ -271,7 +317,7 @@ export default function App() {
   const [currentObjectives, setCurrentObjectives] = useState([]);
 
   const [isCreatingScenario, setIsCreatingScenario] = useState(false);
-  const [customTopic, setCustomTopic] = useState('');
+  const [customTopic, setCustomTopic] = useState("");
   const [isGenerating] = useState(false);
 
   const messagesEndRef = useRef(null);
@@ -282,16 +328,18 @@ export default function App() {
 
   const lastUserIndex = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i]?.sender === 'user') return i;
+      if (messages[i]?.sender === "user") return i;
     }
     return -1;
   }, [messages]);
 
   const filteredScenarios = scenarios
-    .filter(s => {
-      if (selectedLevelId === 'A1' || selectedLevelId === 'A2') return s.difficulty.some(d => ['A1', 'A2'].includes(d));
-      if (selectedLevelId === 'B1' || selectedLevelId === 'B2') return s.difficulty.some(d => ['B1', 'B2'].includes(d));
-      if (selectedLevelId === 'C1') return s.difficulty.includes('C1');
+    .filter((s) => {
+      if (selectedLevelId === "A1" || selectedLevelId === "A2")
+        return s.difficulty.some((d) => ["A1", "A2"].includes(d));
+      if (selectedLevelId === "B1" || selectedLevelId === "B2")
+        return s.difficulty.some((d) => ["B1", "B2"].includes(d));
+      if (selectedLevelId === "C1") return s.difficulty.includes("C1");
       return true;
     })
     .sort((a, b) => {
@@ -302,11 +350,11 @@ export default function App() {
 
   const startChat = (scenario) => {
     setSelectedScenario(scenario);
-    setScreen('chat');
+    setScreen("chat");
     setIsVocabOpen(window.innerWidth >= 1024);
     setErrorMsg(null);
 
-    const sessionObjectives = (scenario.objectives || []).map(obj => ({
+    const sessionObjectives = (scenario.objectives || []).map((obj) => ({
       id: obj.id,
       text: obj.text,
       completed: false
@@ -314,21 +362,17 @@ export default function App() {
     setCurrentObjectives(sessionObjectives);
 
     let intro = "";
-    if (typeof scenario.botPersona.initialMessage === 'string') {
+    if (typeof scenario.botPersona.initialMessage === "string") {
       intro = scenario.botPersona.initialMessage;
     } else {
       intro = scenario.botPersona.initialMessage[selectedLevelId] || scenario.botPersona.initialMessage.default;
     }
 
-    setMessages([{ id: crypto.randomUUID(), sender: 'bot', text: intro }]);
+    setMessages([{ id: crypto.randomUUID(), sender: "bot", text: intro }]);
   };
 
   const toggleObjective = (id) => {
-    setCurrentObjectives(prev =>
-      prev.map(obj =>
-        obj.id === id ? { ...obj, completed: !obj.completed } : obj
-      )
-    );
+    setCurrentObjectives((prev) => prev.map((obj) => (obj.id === id ? { ...obj, completed: !obj.completed } : obj)));
   };
 
   // ✅ sanitiza explicaciones técnicas para alumnos
@@ -345,40 +389,31 @@ export default function App() {
     ) {
       return corrected ? "Prueba esta versión." : "✅ La frase está bien.";
     }
-    // 1 frase máx. (por si viene larga)
+    // 1 frase máx.
     const one = t.split(/(?<=[.!?])\s+/)[0];
     return one;
   };
 
   function normalizeForCompare(s) {
-  return String(s || "")
-    .toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // quita tildes
-    .replace(/[.,;:!?¡¿"“”'()]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function isOnlyStylisticChange(original, corrected) {
-  const a = normalizeForCompare(original);
-  const b = normalizeForCompare(corrected);
-
-  // Si tras normalizar son iguales → cambio solo de mayúsculas, tildes o puntuación
-  if (a === b) return true;
-
-  // Si la diferencia es muy pequeña (p.ej. “Hola María” vs “Hola, María”)
-  // medimos por tokens
-  const at = a.split(" ");
-  const bt = b.split(" ");
-  if (at.length === bt.length) {
-    let diff = 0;
-    for (let i = 0; i < at.length; i++) if (at[i] !== bt[i]) diff++;
-    if (diff <= 1) return true;
+    return String(s || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "") // quita tildes
+      .replace(/[.,;:!?¡¿"“”'()]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
   }
-  return false;
-}
 
-  
+  /**
+   * ✅ SOLO consideramos "estético" si tras normalizar es EXACTAMENTE igual.
+   * (mayúsculas, tildes, puntuación, dobles espacios)
+   */
+  function isOnlyStylisticChange(original, corrected) {
+    const a = normalizeForCompare(original);
+    const b = normalizeForCompare(corrected);
+    return a === b;
+  }
+
   // ✅ autocorrección silenciosa: guarda correction en el mensaje
   async function autoCorrectMessage(messageId, text, level) {
     try {
@@ -387,18 +422,17 @@ function isOnlyStylisticChange(original, corrected) {
       const correctedClean = String(corrected || "").trim();
       if (!correctedClean) return;
 
-      const same =
-        correctedClean.toLowerCase() === String(text).trim().toLowerCase();
+      const originalClean = String(text || "").trim();
+      const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
 
-      if (same) return;
+      // Si es igual o solo estético, no mostramos corrección inline.
+      if (same || isOnlyStylisticChange(originalClean, correctedClean)) return;
 
       const safeExplanation = sanitizeExplanation(explanation, correctedClean);
 
-      setMessages(prev =>
-        prev.map(m =>
-          m.id === messageId
-            ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } }
-            : m
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } } : m
         )
       );
     } catch {
@@ -413,10 +447,10 @@ function isOnlyStylisticChange(original, corrected) {
     const historySnapshot = messages;
     const userText = inputText.trim();
     const userId = crypto.randomUUID();
-    const userMsg = { id: userId, sender: 'user', text: userText };
+    const userMsg = { id: userId, sender: "user", text: userText };
 
-    setMessages(prev => [...prev, userMsg]);
-    setInputText('');
+    setMessages((prev) => [...prev, userMsg]);
+    setInputText("");
     setIsTyping(true);
     setErrorMsg(null);
 
@@ -424,27 +458,21 @@ function isOnlyStylisticChange(original, corrected) {
     autoCorrectMessage(userId, userText, selectedLevelId);
 
     try {
-      const responseData = await callGeminiChat(
-        historySnapshot,
-        selectedScenario,
-        selectedLevelId,
-        userText,
-        currentObjectives
-      );
+      const responseData = await callGeminiChat(historySnapshot, selectedScenario, selectedLevelId, userText, currentObjectives);
 
       // ✅ marcar objetivos automáticamente según el backend
       if (responseData?.completed_objective_ids?.length) {
         const completedIds = new Set(responseData.completed_objective_ids);
-        setCurrentObjectives(prev =>
-          prev.map(obj => ({
+        setCurrentObjectives((prev) =>
+          prev.map((obj) => ({
             ...obj,
             completed: obj.completed || completedIds.has(obj.id)
           }))
         );
       }
 
-      const botMsg = { id: crypto.randomUUID(), sender: 'bot', text: responseData.reply };
-      setMessages(prev => [...prev, botMsg]);
+      const botMsg = { id: crypto.randomUUID(), sender: "bot", text: responseData.reply };
+      setMessages((prev) => [...prev, botMsg]);
     } catch (err) {
       console.error(err);
       setErrorMsg("Error de conexión.");
@@ -462,82 +490,26 @@ function isOnlyStylisticChange(original, corrected) {
         return `💡 ${exp}`;
       }
 
-      const { corrected, explanation } = await callGeminiCorrection(message.text, selectedLevelId);
+      const originalClean = String(message?.text || "").trim();
+      if (!originalClean) return "✅ La frase está bien.";
 
+      const { corrected, explanation } = await callGeminiCorrection(originalClean, selectedLevelId);
       const correctedClean = String(corrected || "").trim();
 
+      // sin corrección útil
+      if (!correctedClean) return "✅ La frase está bien.";
 
-// ✅ sanitiza explicaciones técnicas para alumnos
-const sanitizeExplanation = (explanation, corrected) => {
-  const t = String(explanation || "").trim();
-  if (!t) return corrected ? "Prueba esta versión." : "✅ La frase está bien.";
-
-  const lower = t.toLowerCase();
-  if (
-    lower.includes("no pude devolver json") ||
-    lower.includes("json requested") ||
-    lower.includes("here is") ||
-    lower.includes("the json")
-  ) {
-    return corrected ? "Prueba esta versión." : "✅ La frase está bien.";
-  }
-
-  // 1 frase máx.
-  const one = t.split(/(?<=[.!?])\s+/)[0];
-  return one;
-};
-
-function normalizeForCompare(s) {
-  return String(s || "")
-    .toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // quita tildes
-    .replace(/[.,;:!?¡¿"“”'()]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * ✅ SOLO consideramos "estético" si tras normalizar es EXACTAMENTE igual.
- * (mayúsculas, tildes, puntuación, dobles espacios)
- * Nada de heurísticas por tokens, porque puede colarse cambio de significado.
- */
-function isOnlyStylisticChange(original, corrected) {
-  const a = normalizeForCompare(original);
-  const b = normalizeForCompare(corrected);
-  return a === b;
-}
-
-  // Si tras normalizar son iguales → cambio solo de mayúsculas, tildes o puntuación
-  if (a === b) return true;
-
-  // Si la diferencia es muy pequeña (p.ej. “Hola María” vs “Hola, María”)
-  // medimos por tokens
-  const at = a.split(" ");
-  const bt = b.split(" ");
-  if (at.length === bt.length) {
-    let diff = 0;
-    for (let i = 0; i < at.length; i++) if (at[i] !== bt[i]) diff++;
-    if (diff <= 1) return true;
-  }
-  return false;
-}
-
-  
-  // ✅ autocorrección silenciosa: guarda correction en el mensaje
-
-      
-      if (!correctedClean || same) {
+      const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
+      if (same || isOnlyStylisticChange(originalClean, correctedClean)) {
         return "✅ La frase está bien.";
       }
 
       const safeExplanation = sanitizeExplanation(explanation, correctedClean);
 
       // guardamos correction para que se vea “✨ Corregir: …”
-      setMessages(prev =>
-        prev.map(m =>
-          m.id === message.id
-            ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } }
-            : m
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === message.id ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } } : m
         )
       );
 
@@ -548,7 +520,7 @@ function isOnlyStylisticChange(original, corrected) {
   };
 
   const handleVocabSelect = (word) => {
-    setInputText(prev => prev + (prev ? ' ' : '') + word);
+    setInputText((prev) => prev + (prev ? " " : "") + word);
   };
 
   const handleCreateScenario = async (e) => {
@@ -558,7 +530,7 @@ function isOnlyStylisticChange(original, corrected) {
   };
 
   // --- RENDER: HOME SCREEN ---
-  if (screen === 'home') {
+  if (screen === "home") {
     return (
       <div className="min-h-screen bg-gray-50 font-sans">
         {isCreatingScenario && (
@@ -570,13 +542,15 @@ function isOnlyStylisticChange(original, corrected) {
                 <input
                   type="text"
                   value={customTopic}
-                  onChange={e => setCustomTopic(e.target.value)}
+                  onChange={(e) => setCustomTopic(e.target.value)}
                   placeholder="Ej: En el aeropuerto..."
                   className="w-full border border-gray-300 rounded-lg px-4 py-3 mb-4 focus:ring-2 focus:ring-indigo-500 outline-none"
                   autoFocus
                 />
                 <div className="flex justify-end gap-3">
-                  <button type="button" onClick={() => setIsCreatingScenario(false)} className="px-4 py-2 text-gray-500">Cancelar</button>
+                  <button type="button" onClick={() => setIsCreatingScenario(false)} className="px-4 py-2 text-gray-500">
+                    Cancelar
+                  </button>
                   <button
                     type="submit"
                     disabled={true}
@@ -584,7 +558,7 @@ function isOnlyStylisticChange(original, corrected) {
                     title="Desactivado hasta backend (/api/scenario)"
                   >
                     {isGenerating ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
-                    {isGenerating ? 'Creando...' : 'Generar'}
+                    {isGenerating ? "Creando..." : "Generar"}
                   </button>
                 </div>
               </form>
@@ -617,7 +591,7 @@ function isOnlyStylisticChange(original, corrected) {
           <div className="mb-8">
             <h2 className="text-2xl font-bold text-gray-900 mb-2">Selecciona tu Nivel</h2>
             <div className="flex flex-wrap gap-2 md:gap-3 mb-8">
-              {LEVELS.map(level => (
+              {LEVELS.map((level) => (
                 <LevelBadge
                   key={level.id}
                   level={level}
@@ -641,10 +615,14 @@ function isOnlyStylisticChange(original, corrected) {
                   <Plus size={32} />
                 </div>
                 <h3 className="font-bold text-lg text-center">Crear Situación</h3>
-                <p className="text-indigo-100 text-xs text-center mt-2">Desactivado por seguridad<br />hasta moverlo al backend.</p>
+                <p className="text-indigo-100 text-xs text-center mt-2">
+                  Desactivado por seguridad
+                  <br />
+                  hasta moverlo al backend.
+                </p>
               </div>
 
-              {filteredScenarios.map(scenario => (
+              {filteredScenarios.map((scenario) => (
                 <div
                   key={scenario.id}
                   onClick={() => startChat(scenario)}
@@ -653,22 +631,26 @@ function isOnlyStylisticChange(original, corrected) {
                   <div className={`h-2 ${scenario.color}`}></div>
                   <div className="p-5">
                     <div className="flex justify-between items-start mb-3">
-                      <div className={`p-2.5 rounded-lg bg-gray-50 text-gray-700 group-hover:text-indigo-600 group-hover:bg-indigo-50 transition-colors`}>
+                      <div className="p-2.5 rounded-lg bg-gray-50 text-gray-700 group-hover:text-indigo-600 group-hover:bg-indigo-50 transition-colors">
                         {scenario.icon}
                       </div>
                     </div>
                     <h3 className="text-lg font-bold text-gray-800 mb-1">{scenario.title}</h3>
                     <p className="text-gray-500 text-xs mb-3 line-clamp-2">{scenario.description}</p>
                     <div className="flex flex-wrap gap-1 mt-auto">
-                      {scenario.difficulty.map(d => (
-                        <span key={d} className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded border border-gray-200 font-mono">{d}</span>
+                      {scenario.difficulty.map((d) => (
+                        <span
+                          key={d}
+                          className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded border border-gray-200 font-mono"
+                        >
+                          {d}
+                        </span>
                       ))}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
-
           </div>
         </main>
       </div>
@@ -681,7 +663,10 @@ function isOnlyStylisticChange(original, corrected) {
       <div className="flex-1 flex flex-col h-full relative z-0">
         <header className="bg-white px-4 py-3 border-b flex items-center justify-between shrink-0 shadow-sm z-10">
           <div className="flex items-center gap-3">
-            <button onClick={() => setScreen('home')} className="p-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors">
+            <button
+              onClick={() => setScreen("home")}
+              className="p-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors"
+            >
               <ArrowLeft size={20} />
             </button>
             <div>
@@ -693,7 +678,9 @@ function isOnlyStylisticChange(original, corrected) {
           <div className="flex gap-2">
             <button
               onClick={() => setIsVocabOpen(!isVocabOpen)}
-              className={`p-2 rounded-lg flex items-center gap-2 transition-colors ${isVocabOpen ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-gray-100 text-gray-600'}`}
+              className={`p-2 rounded-lg flex items-center gap-2 transition-colors ${
+                isVocabOpen ? "bg-indigo-100 text-indigo-700" : "hover:bg-gray-100 text-gray-600"
+              }`}
             >
               <Target size={20} />
               <span className="hidden sm:inline font-medium text-sm">Misión</span>
@@ -704,16 +691,14 @@ function isOnlyStylisticChange(original, corrected) {
         <div className="flex-1 overflow-y-auto p-4 bg-slate-50">
           <div className="max-w-3xl mx-auto">
             {errorMsg && (
-              <div className="mb-3 text-sm text-red-600 bg-red-50 border border-red-200 p-2 rounded">
-                {errorMsg}
-              </div>
+              <div className="mb-3 text-sm text-red-600 bg-red-50 border border-red-200 p-2 rounded">{errorMsg}</div>
             )}
 
             {messages.map((msg, idx) => (
               <ChatMessage
                 key={msg.id}
                 message={msg}
-                isUser={msg.sender === 'user'}
+                isUser={msg.sender === "user"}
                 onCorrect={handleCorrectionRequest}
                 isLastUser={idx === lastUserIndex}
               />
@@ -753,9 +738,11 @@ function isOnlyStylisticChange(original, corrected) {
         </div>
       </div>
 
-      <div className={`fixed inset-y-0 right-0 w-80 bg-white border-l shadow-2xl transform transition-transform duration-300 ease-in-out z-20 md:relative md:transform-none md:shadow-none ${
-        isVocabOpen ? 'translate-x-0' : 'translate-x-full md:hidden'
-      }`}>
+      <div
+        className={`fixed inset-y-0 right-0 w-80 bg-white border-l shadow-2xl transform transition-transform duration-300 ease-in-out z-20 md:relative md:transform-none md:shadow-none ${
+          isVocabOpen ? "translate-x-0" : "translate-x-full md:hidden"
+        }`}
+      >
         <div className="h-full flex flex-col">
           <div className="p-4 border-b flex items-center justify-between bg-gray-50">
             <div className="flex items-center gap-2 text-gray-800 font-semibold">
@@ -769,17 +756,11 @@ function isOnlyStylisticChange(original, corrected) {
 
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
             <div>
-              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                Objetivos comunicativos
-              </h4>
+              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Objetivos comunicativos</h4>
 
               <div className="space-y-3">
-                {currentObjectives.map(obj => (
-                  <ObjectiveItem
-                    key={obj.id}
-                    objective={obj}
-                    onToggle={() => toggleObjective(obj.id)}
-                  />
+                {currentObjectives.map((obj) => (
+                  <ObjectiveItem key={obj.id} objective={obj} onToggle={() => toggleObjective(obj.id)} />
                 ))}
               </div>
 
@@ -798,16 +779,12 @@ function isOnlyStylisticChange(original, corrected) {
                 ))}
               </div>
             </div>
-
           </div>
         </div>
       </div>
 
       {isVocabOpen && (
-        <div
-          className="fixed inset-0 bg-black bg-opacity-25 z-10 md:hidden"
-          onClick={() => setIsVocabOpen(false)}
-        ></div>
+        <div className="fixed inset-0 bg-black bg-opacity-25 z-10 md:hidden" onClick={() => setIsVocabOpen(false)}></div>
       )}
     </div>
   );
