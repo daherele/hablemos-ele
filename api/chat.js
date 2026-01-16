@@ -53,7 +53,58 @@ export default async function handler(req, res) {
       })
       .join("\n");
 
-    const baseSystemPrompt = `
+
+    const LEVEL_RULES = {
+  A1: `
+REGLAS DE NIVEL A1 (OBLIGATORIAS):
+- Usa SOLO presente de indicativo.
+- Frases MUY cortas (max 6–8 palabras).
+- Léxico muy frecuente y concreto.
+- NO uses: pasado, futuro, condicional, subjuntivo, perífrasis complejas.
+- NO uses preguntas abiertas tipo: "¿Qué tal tu semana?" / "Cuéntame..."
+- Mantén la conversación en 1 acción: responder + 1 pregunta simple.
+- Si reformulas, que sea muy corta.
+`.trim(),
+
+  A2: `
+REGLAS DE NIVEL A2 (OBLIGATORIAS):
+- Presente y pasado perfecto (he + participio).
+- Frases cortas; alguna coordinación con "y/pero".
+- Preguntas simples y dirigidas.
+- Evita expresiones idiomáticas complejas.
+`.trim(),
+
+  B1: `
+REGLAS DE NIVEL B1:
+- Pasados principales.
+- Conectores básicos (porque, entonces, aunque).
+- Puedes pedir opinión simple.
+`.trim(),
+
+  B2: `
+REGLAS DE NIVEL B2:
+- Subjuntivo frecuente cuando corresponda.
+- Conectores discursivos y matización.
+`.trim(),
+
+  C1: `
+REGLAS DE NIVEL C1:
+- Lengua natural con registro adecuado.
+- Corrige solo lo relevante.
+`.trim(),
+
+  C2: `
+REGLAS DE NIVEL C2:
+- Máxima naturalidad, precisión y flexibilidad estilística.
+`.trim(),
+};
+
+function getLevelRules(level) {
+  return LEVEL_RULES[level] || LEVEL_RULES.A1;
+}
+
+    
+const baseSystemPrompt = `
 Actúa como un interlocutor nativo en un escenario de práctica de español.
 
 CONTEXTO:
@@ -64,13 +115,15 @@ Nivel del estudiante: ${level}
 OBJETIVOS:
 ${objectivesList}
 
-REGLAS:
+${getLevelRules(level)}
+
+REGLAS GENERALES:
 - Responde SIEMPRE en español.
-- Mantén el rol del escenario (persona real, no profesor).
-- Máximo 3 frases cortas (porque a veces habrá reformulación + respuesta + pregunta).
+- Mantén el rol del escenario (persona real, no profesor), PERO respeta estrictamente las reglas del nivel.
+- Máximo 3 frases cortas.
 - NO expliques gramática ni evalúes.
 - Interpreta con buena fe.
-- Termina normalmente con una pregunta breve.
+- Termina normalmente con una pregunta breve (adecuada al nivel).
 
 REFORMULACIÓN:
 - Si el mensaje del alumno tiene errores pero se entiende, empieza tu respuesta con una reformulación breve:
@@ -79,7 +132,6 @@ REFORMULACIÓN:
 - Si el mensaje es realmente ininteligible, NO reformules y di:
   "Perdón, no te entiendo. ¿Puedes decirlo de otra forma?"
 - Nunca inventes contenido: la reformulación debe mantener el significado.
-
 
 FORMATO (OBLIGATORIO):
 Devuelve SOLO un JSON válido con las claves:
@@ -91,6 +143,7 @@ PROHIBIDO:
 - Markdown o \`\`\`
 - Frases tipo "Here is..."
 `.trim();
+
 
     const contents = [
       ...shortHistory.map((msg) => ({
@@ -177,7 +230,7 @@ PROHIBIDO:
                 },
                 required: ["reply", "completed_objective_ids"]
               },
-              temperature: strict ? 0.1 : 0.4,
+temperature: strict ? 0.1 : (level === "A1" ? 0.2 : level === "A2" ? 0.25 : 0.4),
               maxOutputTokens: 260
             }
           })
