@@ -500,7 +500,7 @@ async function autoCorrectMessage(messageId, text, level) {
       // sin corrección útil
       if (!correctedClean) return "✅ La frase está bien.";
 
-onst same = correctedClean.toLowerCase() === originalClean.toLowerCase();
+const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
 if (same) return "✅ La frase está bien.";
 
       const safeExplanation = sanitizeExplanation(explanation, correctedClean);
