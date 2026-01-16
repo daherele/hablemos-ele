@@ -81,6 +81,7 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
     return {
       reply: typeof data?.reply === "string" ? data.reply : "No pude generar respuesta.",
       objective_updates: Array.isArray(data?.objective_updates) ? data.objective_updates : [],
+      completed_objective_ids: Array.isArray(data?.completed_objective_ids) ? data.completed_objective_ids : [],
       follow_up_question: typeof data?.follow_up_question === "string" ? data.follow_up_question : ""
     };
   } catch (err) {
@@ -89,9 +90,21 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
   }
 };
 
-// 🚫 Desactivadas por ahora (por seguridad) hasta que tengas endpoints backend
-const callGeminiCorrection = async () => {
-  return "🔒 Corrección desactivada por seguridad (mueve esta función a /api/correct).";
+const callGeminiCorrection = async (text, level) => {
+  try {
+    const data = await postJSON("/api/correct", { text, level });
+    const corrected =
+      typeof data?.corrected === "string" && data.corrected.trim()
+        ? data.corrected.trim()
+        : text;
+    const explanation =
+      typeof data?.explanation === "string" && data.explanation.trim()
+        ? data.explanation.trim()
+        : "Corrección aplicada.";
+    return `Corrección: ${corrected}\nExplicación: ${explanation}`;
+  } catch (err) {
+    return `No pude corregir ahora mismo. ${err?.message ? `(${err.message})` : ""}`.trim();
+  }
 };
 const callGeminiScenarioGen = async () => {
   throw new Error("🔒 Generación de escenarios desactivada por seguridad (mueve a /api/scenario).");
@@ -412,6 +425,20 @@ export default function App() {
         currentObjectives
       );
 
+      if (responseData.completed_objective_ids && responseData.completed_objective_ids.length > 0) {
+        setCurrentObjectives(prev => prev.map(obj => {
+          if (responseData.completed_objective_ids.includes(obj.id)) {
+            return {
+              ...obj,
+              status: 'confirmed',
+              evidence: '',
+              reason: ''
+            };
+          }
+          return obj;
+        }));
+      }
+
       if (responseData.objective_updates && responseData.objective_updates.length > 0) {
         setCurrentObjectives(prev => prev.map(obj => {
           const update = responseData.objective_updates.find(u => u.id === obj.id);
@@ -711,4 +738,3 @@ export default function App() {
     </div>
   );
 }
-
