@@ -9,7 +9,6 @@ import {
  * ✅ Frontend seguro:
  * - No API key en cliente.
  * - Chat y Corrección vía endpoints backend: /api/chat y /api/correct
- * - Objetivos comunicativos: MANUALES (robusto, no depende de IA)
  */
 
 // --- MOCK AI LOGIC (FALLBACK) ---
@@ -140,8 +139,8 @@ const ChatMessage = ({ message, isUser, onCorrect, isLastUser }) => {
   const handleCorrection = async () => {
     setIsCorrecting(true);
     try {
-      const result = await onCorrect(message.text);
-      setFeedback(result);
+      const resultText = await onCorrect(message); // ⬅️ ahora pasamos el mensaje entero
+      setFeedback(resultText);
     } finally {
       setIsCorrecting(false);
     }
@@ -154,12 +153,21 @@ const ChatMessage = ({ message, isUser, onCorrect, isLastUser }) => {
           <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${isUser ? 'ml-2 bg-indigo-600' : 'mr-2 bg-gray-200'}`}>
             {isUser ? <User size={16} className="text-white" /> : <Bot size={16} className="text-gray-600" />}
           </div>
+
           <div className={`p-3 rounded-2xl text-sm md:text-base shadow-sm relative group ${
             isUser
               ? 'bg-indigo-600 text-white rounded-tr-none'
               : 'bg-white border border-gray-100 text-gray-800 rounded-tl-none'
           }`}>
             <SafeRender content={message.text} />
+
+            {/* ✅ Mostrar corrección inline debajo del texto del alumno (sin reemplazarlo) */}
+            {isUser && message?.correction?.corrected && (
+              <div className="mt-2 text-xs text-indigo-100">
+                ✨ <span className="font-semibold">Corregir:</span>{" "}
+                <span className="underline underline-offset-2">{message.correction.corrected}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -230,7 +238,7 @@ const LevelBadge = ({ level, selected, onClick }) => (
   </button>
 );
 
-// ✅ Objetivos manuales (robustos)
+// Objetivos (ahora: auto + manual)
 const ObjectiveItem = ({ objective, onToggle }) => {
   const { text, completed } = objective;
 
@@ -260,10 +268,8 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
 
-  // Objetivos manuales
   const [currentObjectives, setCurrentObjectives] = useState([]);
 
-  // Crear escenario (desactivado por ahora)
   const [isCreatingScenario, setIsCreatingScenario] = useState(false);
   const [customTopic, setCustomTopic] = useState('');
   const [isGenerating] = useState(false);
@@ -274,7 +280,6 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  // ✅ índice del último mensaje del usuario (ROBUSTO)
   const lastUserIndex = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i]?.sender === 'user') return i;
@@ -315,7 +320,7 @@ export default function App() {
       intro = scenario.botPersona.initialMessage[selectedLevelId] || scenario.botPersona.initialMessage.default;
     }
 
-    setMessages([{ id: 1, sender: 'bot', text: intro }]);
+    setMessages([{ id: crypto.randomUUID(), sender: 'bot', text: intro }]);
   };
 
   const toggleObjective = (id) => {
@@ -326,28 +331,90 @@ export default function App() {
     );
   };
 
+  // ✅ sanitiza explicaciones técnicas para alumnos
+  const sanitizeExplanation = (explanation, corrected) => {
+    const t = String(explanation || "").trim();
+    if (!t) return corrected ? "Prueba esta versión." : "✅ La frase está bien.";
+
+    const lower = t.toLowerCase();
+    if (
+      lower.includes("no pude devolver json") ||
+      lower.includes("json requested") ||
+      lower.includes("here is") ||
+      lower.includes("the json")
+    ) {
+      return corrected ? "Prueba esta versión." : "✅ La frase está bien.";
+    }
+    // 1 frase máx. (por si viene larga)
+    const one = t.split(/(?<=[.!?])\s+/)[0];
+    return one;
+  };
+
+  // ✅ autocorrección silenciosa: guarda correction en el mensaje
+  async function autoCorrectMessage(messageId, text, level) {
+    try {
+      const { corrected, explanation } = await callGeminiCorrection(text, level);
+
+      const correctedClean = String(corrected || "").trim();
+      if (!correctedClean) return;
+
+      const same =
+        correctedClean.toLowerCase() === String(text).trim().toLowerCase();
+
+      if (same) return;
+
+      const safeExplanation = sanitizeExplanation(explanation, correctedClean);
+
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === messageId
+            ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } }
+            : m
+        )
+      );
+    } catch {
+      // silencioso
+    }
+  }
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!inputText.trim()) return;
 
     const historySnapshot = messages;
-    const userMsg = { id: Date.now(), sender: 'user', text: inputText };
+    const userText = inputText.trim();
+    const userId = crypto.randomUUID();
+    const userMsg = { id: userId, sender: 'user', text: userText };
 
     setMessages(prev => [...prev, userMsg]);
     setInputText('');
     setIsTyping(true);
     setErrorMsg(null);
 
+    // ✅ autocorrección en paralelo (no bloquea)
+    autoCorrectMessage(userId, userText, selectedLevelId);
+
     try {
       const responseData = await callGeminiChat(
         historySnapshot,
         selectedScenario,
         selectedLevelId,
-        userMsg.text,
+        userText,
         currentObjectives
       );
 
-      const botMsg = { id: Date.now() + 1, sender: 'bot', text: responseData.reply };
+      // ✅ marcar objetivos automáticamente según el backend
+      if (responseData?.completed_objective_ids?.length) {
+        const completedIds = new Set(responseData.completed_objective_ids);
+        setCurrentObjectives(prev =>
+          prev.map(obj => ({
+            ...obj,
+            completed: obj.completed || completedIds.has(obj.id)
+          }))
+        );
+      }
+
+      const botMsg = { id: crypto.randomUUID(), sender: 'bot', text: responseData.reply };
       setMessages(prev => [...prev, botMsg]);
     } catch (err) {
       console.error(err);
@@ -357,29 +424,39 @@ export default function App() {
     }
   };
 
-  const handleCorrectionRequest = async (text) => {
+  // ✅ botón Corregir: feedback breve y útil, sin reemplazar el texto del alumno
+  const handleCorrectionRequest = async (message) => {
     try {
-      const { corrected, explanation } = await callGeminiCorrection(text, selectedLevelId);
+      // si ya tenemos corrección guardada, la reutilizamos
+      if (message?.correction?.corrected) {
+        const exp = sanitizeExplanation(message?.correction?.explanation, message.correction.corrected);
+        return `💡 ${exp}`;
+      }
 
-      // Si no hay corrección útil:
-      if (!corrected) return explanation || "No pude corregir ahora mismo.";
+      const { corrected, explanation } = await callGeminiCorrection(message.text, selectedLevelId);
 
-      // Reemplaza el último mensaje del usuario por la versión corregida
-      setMessages((prev) => {
-        const copy = [...prev];
-        for (let i = copy.length - 1; i >= 0; i--) {
-          if (copy[i]?.sender === "user") {
-            copy[i] = { ...copy[i], text: corrected };
-            break;
-          }
-        }
-        return copy;
-      });
+      const correctedClean = String(corrected || "").trim();
+      const same =
+        correctedClean.toLowerCase() === String(message.text).trim().toLowerCase();
 
-      // Feedback breve
-      return explanation ? `💡 ${explanation}` : "✅ Tu frase está bien.";
-    } catch (e) {
-      return "No pude corregir ahora mismo.";
+      if (!correctedClean || same) {
+        return "✅ La frase está bien.";
+      }
+
+      const safeExplanation = sanitizeExplanation(explanation, correctedClean);
+
+      // guardamos correction para que se vea “✨ Corregir: …”
+      setMessages(prev =>
+        prev.map(m =>
+          m.id === message.id
+            ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } }
+            : m
+        )
+      );
+
+      return `💡 ${safeExplanation}`;
+    } catch {
+      return "No puedo corregir ahora mismo.";
     }
   };
 
@@ -620,7 +697,7 @@ export default function App() {
               </div>
 
               <div className="mt-3 text-xs text-gray-700 bg-green-50 border border-green-200 rounded p-2">
-                ✅ Marca tú lo que crees que ya has conseguido.
+                ✅ Se marcan automáticamente, pero puedes ajustarlos manualmente.
               </div>
             </div>
 
