@@ -69,13 +69,14 @@ FORMATO JSON ESTRICTO (SIN MARKDOWN, SOLO JSON):
     // Recorta historial para evitar ruido y coste
     const shortHistory = Array.isArray(history) ? history.slice(-8) : [];
 
-    const contents = [
+       const contents = [
       ...shortHistory.map((msg) => ({
         role: msg.sender === "user" ? "user" : "model",
         parts: [{ text: String(msg.text ?? "") }]
       })),
       { role: "user", parts: [{ text: userMessage }] }
     ];
+
 
     const geminiResp = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
