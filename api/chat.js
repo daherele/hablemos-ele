@@ -19,10 +19,17 @@ export default async function handler(req, res) {
       currentObjectives = []
     } = req.body || {};
 
-    if (!scenario?.title || !scenario?.botPersona?.name) {
+    const scenarioTitle =
+      typeof scenario?.title === "string" ? scenario.title.trim() : "";
+    const scenarioRole =
+      typeof scenario?.botPersona?.name === "string" ? scenario.botPersona.name.trim() : "";
+    const normalizedUserMessage =
+      typeof userMessage === "string" ? userMessage.trim() : "";
+
+    if (!scenarioTitle || !scenarioRole) {
       return res.status(400).json({ error: "Missing scenario data" });
     }
-    if (!userMessage || typeof userMessage !== "string") {
+    if (!normalizedUserMessage) {
       return res.status(400).json({ error: "Missing userMessage" });
     }
 
@@ -48,8 +55,8 @@ export default async function handler(req, res) {
 Actúa como un interlocutor nativo en un escenario de práctica de español.
 
 CONTEXTO:
-Escenario: "${scenario.title}"
-Rol: "${scenario.botPersona.name}"
+Escenario: "${scenarioTitle}"
+Rol: "${scenarioRole}"
 Nivel del estudiante: ${level}
 
 OBJETIVOS DE LA TAREA:
@@ -86,7 +93,7 @@ IMPORTANTE: No escribas texto fuera del JSON. No uses \`\`\`. No pongas frases t
         role: msg?.sender === "user" ? "user" : "model",
         parts: [{ text: msg.text }]
       })),
-      { role: "user", parts: [{ text: userMessage }] }
+      { role: "user", parts: [{ text: normalizedUserMessage }] }
     ];
 
     const geminiResp = await fetch(
@@ -119,12 +126,24 @@ IMPORTANTE: No escribas texto fuera del JSON. No uses \`\`\`. No pongas frases t
       }
     );
 
-    const data = await geminiResp.json();
+    const geminiText = await geminiResp.text();
+    let data;
+    try {
+      data = JSON.parse(geminiText);
+    } catch (parseError) {
+      data = null;
+    }
 
     if (!geminiResp.ok) {
       return res.status(geminiResp.status).json({
         error: "Gemini API error",
-        details: data
+        details: data ?? geminiText.slice(0, 700)
+      });
+    }
+    if (!data) {
+      return res.status(500).json({
+        error: "Invalid JSON from model",
+        debug_raw: geminiText.slice(0, 700)
       });
     }
 
@@ -156,7 +175,7 @@ IMPORTANTE: No escribas texto fuera del JSON. No uses \`\`\`. No pongas frases t
           : "No pude generar respuesta.";
 
       const ids = Array.isArray(parsed?.completed_objective_ids)
-        ? parsed.completed_objective_ids.map(String)
+        ? [...new Set(parsed.completed_objective_ids.map(String))]
         : [];
 
       return res.status(200).json({
