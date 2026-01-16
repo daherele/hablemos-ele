@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageCircle, BookOpen, Send, ArrowLeft, Utensils, Building2, GraduationCap, Bus, Info, ChevronRight, X, User, Bot, Sparkles, Stethoscope, Briefcase, ShoppingBag, Landmark, Key, ShieldAlert, Volume2, Wand2, Loader2, Home, Users, MapPin, ZapOff, Plus, FileText, CheckCircle, AlertCircle } from 'lucide-react';
+import { MessageCircle, BookOpen, Send, ArrowLeft, Utensils, Building2, GraduationCap, Bus, Info, ChevronRight, X, User, Bot, Sparkles, Stethoscope, Briefcase, ShoppingBag, Landmark, Key, ShieldAlert, Volume2, Wand2, Loader2, Home, Users, MapPin, ZapOff, Plus, FileText, CheckCircle, AlertCircle, Target, CheckSquare, Square, HelpCircle, ThumbsUp, ThumbsDown } from 'lucide-react';
 
 // --- GEMINI API CONFIGURATION ---
 
@@ -14,51 +14,81 @@ const apiKey = "";
 // --- MOCK AI LOGIC (FALLBACK) ---
 const generateMockReply = (input, contextId, level) => {
   const lowerInput = input.toLowerCase();
+  let updates = [];
   
-  const responses = {
-    cafe: {
-      keywords: { 'café': ['¡Marchando!', '¿Con leche?'], 'cuenta': ['Enseguida.', 'Son 3 euros.'] },
-      fallback: ['¿Desea algo más?', '¡Entendido!']
-    },
-    default: {
-      keywords: { 'hola': ['¡Hola!', 'Buenos días.'], 'gracias': ['De nada.', 'A ti.'] },
-      fallback: ['Entiendo.', 'Interesante.', 'Continúa, por favor.']
-    }
-  };
-
-  const contextResponses = responses[contextId] || responses.default;
-  let reply = null;
-
-  for (const [key, options] of Object.entries(contextResponses.keywords)) {
-    if (lowerInput.includes(key)) {
-      reply = options[Math.floor(Math.random() * options.length)];
-      break;
+  // Lógica mock básica
+  if (contextId === 'friend_house') {
+    if (lowerInput.includes('hola') || lowerInput.includes('buenos')) {
+      updates.push({
+        id: 'obj_greet',
+        status: 'possible',
+        confidence: 0.9,
+        evidence: input,
+        reason: "Saludo reconocido"
+      });
     }
   }
-  return `(Demo) ${reply || contextResponses.fallback[0]}`;
+
+  const responses = ["¡Hola! ¿Cómo estás?", "Entiendo, cuéntame más.", "Muy bien."];
+  const reply = responses[Math.floor(Math.random() * responses.length)];
+  
+  return JSON.stringify({
+    reply: `(Demo) ${reply}`,
+    objective_updates: updates,
+    follow_up_question: "¿Y qué tal tu familia?"
+  });
 };
 
 // --- GEMINI API CALLS ---
 
-const callGeminiChat = async (history, scenario, level, userMessage) => {
+const callGeminiChat = async (history, scenario, level, userMessage, currentObjectives) => {
   if (!apiKey) {
     return new Promise(resolve => {
       setTimeout(() => {
-        resolve(generateMockReply(userMessage, scenario.id, level));
+        resolve(JSON.parse(generateMockReply(userMessage, scenario.id, level)));
       }, 1000);
     });
   }
 
+  const pendingObjectives = currentObjectives.filter(o => o.status !== 'confirmed');
+  
+  const objectivesContext = pendingObjectives.map(o => 
+    `- ID: "${o.id}" DESC: "${o.text}"`
+  ).join('\n');
+
   const systemPrompt = `
-    Eres un asistente conversacional para estudiantes de español como lengua extranjera.
-    ROL: ${scenario.botPersona.name} en ${scenario.title}.
+    ROL: Actor nativo en rol de "${scenario.botPersona.name}" (Escenario: "${scenario.title}").
     NIVEL ALUMNO: ${level}.
-    INSTRUCCIONES: Responde solo en español, corrige implícitamente, mantén el rol. Máximo 2 frases.
+    
+    MISIÓN DEL ALUMNO (Objetivos pendientes):
+    ${objectivesContext}
+
+    TAREA:
+    1. Lee el último mensaje del alumno.
+    2. Responde como tu personaje (natural, breve, nivel ${level}).
+    3. Detecta si el alumno ha avanzado en sus objetivos. NO evalúes perfección, busca INTENCIÓN comunicativa lograda.
+    4. Si dudas, confidence bajo.
+    5. Propón una pregunta de seguimiento si ayuda a la misión.
+
+    FORMATO JSON ESTRICTO (NO MARKDOWN, SOLO JSON):
+    {
+      "reply": "Tu respuesta en español (máx 2 frases)",
+      "objective_updates": [
+        {
+          "id": "id_del_objetivo",
+          "status": "possible",
+          "confidence": 0.0 to 1.0,
+          "evidence": "fragmento del texto del alumno",
+          "reason": "motivo muy breve en español"
+        }
+      ],
+      "follow_up_question": "pregunta corta opcional o string vacío"
+    }
   `;
 
   const contents = [
     { role: "user", parts: [{ text: systemPrompt }] },
-    ...history.map(msg => ({
+    ...history.slice(-6).map(msg => ({
       role: msg.sender === 'user' ? 'user' : 'model',
       parts: [{ text: msg.text }]
     })),
@@ -71,15 +101,26 @@ const callGeminiChat = async (history, scenario, level, userMessage) => {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents })
+        body: JSON.stringify({ 
+          contents,
+          generationConfig: { responseMimeType: "application/json" }
+        })
       }
     );
+    
     if (!response.ok) throw new Error("API Error");
     const data = await response.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || "No te he entendido bien.";
+    const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    try {
+      return JSON.parse(textResponse);
+    } catch (e) {
+      console.warn("JSON Malformado", textResponse);
+      return { reply: textResponse, objective_updates: [] };
+    }
   } catch (error) {
     console.error("Gemini Error:", error);
-    return "Error de conexión con la IA.";
+    return { reply: "Lo siento, hubo un error de conexión.", objective_updates: [] };
   }
 };
 
@@ -100,79 +141,9 @@ const callGeminiCorrection = async (text, level) => {
   } catch (error) { return "Error de conexión."; }
 };
 
-// ✨ NEW: SCENARIO GENERATOR
 const callGeminiScenarioGen = async (topic, level) => {
   if (!apiKey) throw new Error("NO_API_KEY");
-
-  const prompt = `
-    Create a Spanish learning scenario for level ${level} based on the topic: "${topic}".
-    Return ONLY a valid JSON object with this structure:
-    {
-      "id": "custom_${Date.now()}",
-      "title": "Short Title (in Spanish)",
-      "description": "Brief description (in Spanish)",
-      "color": "bg-indigo-600",
-      "vocab": [
-        {"word": "Spanish word/phrase", "type": "noun/verb/phrase", "translation": "English translation"}
-      ],
-      "botPersona": {
-        "name": "Role Name",
-        "initialMessage": {
-          "${level}": "Initial greeting in Spanish for level ${level}",
-          "default": "Default greeting"
-        }
-      }
-    }
-    Generate 5 relevant vocab items. Ensure all fields are strings, not objects.
-  `;
-
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: "application/json" }
-        })
-      }
-    );
-    const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    return JSON.parse(text);
-  } catch (error) {
-    console.error("Scenario Gen Error:", error);
-    throw error;
-  }
-};
-
-// ✨ NEW: FEEDBACK GENERATOR
-const callGeminiFeedback = async (history, level) => {
-  if (!apiKey) return null;
-
-  const conversationText = history.map(m => `${m.sender}: ${m.text}`).join('\n');
-  const prompt = `
-    Analyze this conversation for a Spanish student (Level ${level}).
-    Conversation:
-    ${conversationText}
-
-    Return ONLY a valid JSON object with:
-    {
-      "score": number (1-10),
-      "comment": "Brief encouraging comment in Spanish (max 20 words)",
-      "corrections": [
-        "Correction 1 (e.g. 'Dijiste X, mejor di Y')",
-        "Correction 2"
-      ],
-      "goodPoints": [
-        "Good point 1",
-        "Good point 2"
-      ]
-    }
-    Limit to 3 corrections and 2 good points. Ensure arrays contain strings only.
-  `;
-
+  const prompt = `Create a Spanish learning scenario for level ${level} based on: "${topic}". Return JSON: { "id": "cust_${Date.now()}", "title": "...", "description": "...", "color": "bg-indigo-500", "objectives": [{"id": "o1", "text": "Objective 1"}, {"id": "o2", "text": "Objective 2"}], "vocab": [{"word": "...", "type": "...", "translation": "..."}], "botPersona": { "name": "...", "initialMessage": { "${level}": "...", "default": "..." } } }`;
   try {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
@@ -187,10 +158,7 @@ const callGeminiFeedback = async (history, level) => {
     );
     const data = await response.json();
     return JSON.parse(data.candidates?.[0]?.content?.parts?.[0]?.text);
-  } catch (error) {
-    console.error("Feedback Error:", error);
-    return null;
-  }
+  } catch (error) { throw error; }
 };
 
 const callGeminiTTS = async (text) => {
@@ -264,20 +232,26 @@ const INITIAL_SCENARIOS = [
     title: 'Visita a una Amiga',
     difficulty: ['A1', 'A2'],
     icon: <Home className="w-6 h-6" />,
-    description: 'Saludar, entrar en casa y conversaciones informales.',
+    description: 'Practica saludos informales y etiqueta básica de visita.',
     color: 'bg-rose-400',
+    objectives: [
+      { id: 'obj_greet', text: 'Saludar adecuadamente a tu amiga' },
+      { id: 'obj_drink', text: 'Aceptar o rechazar una bebida' },
+      { id: 'obj_compliment', text: 'Hacer un cumplido sobre la casa' },
+      { id: 'obj_farewell', text: 'Despedirse al marcharte' }
+    ],
     vocab: [
       { word: '¡Hola! ¿Qué tal?', type: 'phrase', translation: 'Hello! How are you?' },
       { word: 'Pasa, pasa', type: 'phrase', translation: 'Come in, come in' },
-      { word: 'Siéntate, por favor', type: 'phrase', translation: 'Sit down, please' },
-      { word: '¿Quieres beber algo?', type: 'phrase', translation: 'Do you want something to drink?' },
-      { word: 'Tu casa es muy bonita', type: 'phrase', translation: 'Your house is very pretty' },
+      { word: '¡Qué casa tan bonita!', type: 'phrase', translation: 'What a beautiful house!' },
+      { word: 'Sí, un poco de agua por favor', type: 'phrase', translation: 'Yes, some water please' },
+      { word: 'Me tengo que ir', type: 'phrase', translation: 'I have to go' },
     ],
     botPersona: {
       name: 'María (Amiga)',
       initialMessage: {
         A1: '¡Hola! ¡Qué bien que has venido! Pasa, por favor.',
-        A2: '¡Hola! Cuánto tiempo sin verte. Deja tu abrigo ahí y ponte cómoda. ¿Qué tal el viaje?',
+        A2: '¡Hola! Cuánto tiempo. Deja tu abrigo ahí. ¿Qué tal el viaje?',
         default: '¡Hola! Bienvenida a mi casa.'
       }
     }
@@ -289,11 +263,15 @@ const INITIAL_SCENARIOS = [
     icon: <Users className="w-6 h-6" />,
     description: 'Poner la mesa, hablar de comida y rutinas familiares.',
     color: 'bg-amber-500',
+    objectives: [
+      { id: 'obj_offer_help', text: 'Ofrecer ayuda para poner la mesa' },
+      { id: 'obj_ask_food', text: 'Preguntar qué hay de cenar' },
+      { id: 'obj_compliment_food', text: 'Elogiar la comida' }
+    ],
     vocab: [
       { word: 'Poner la mesa', type: 'verb', translation: 'To set the table' },
       { word: 'La cena está lista', type: 'phrase', translation: 'Dinner is ready' },
       { word: '¿Qué hay de comer?', type: 'phrase', translation: 'What is for dinner?' },
-      { word: 'Pásame el pan', type: 'phrase', translation: 'Pass me the bread' },
       { word: 'Está muy rico', type: 'phrase', translation: 'It is very tasty' },
     ],
     botPersona: {
@@ -310,13 +288,17 @@ const INITIAL_SCENARIOS = [
     title: 'En la Cafetería',
     difficulty: ['A1', 'A2'],
     icon: <Utensils className="w-6 h-6" />,
-    description: 'Pedir bebidas, aperitivos y pagar la cuenta.',
+    description: 'Pide lo que quieres y gestiona la cuenta.',
     color: 'bg-orange-400',
+    objectives: [
+      { id: 'obj_order_drink', text: 'Pedir una bebida específica' },
+      { id: 'obj_ask_food', text: 'Preguntar si tienen algo para comer' },
+      { id: 'obj_pay', text: 'Pedir la cuenta' }
+    ],
     vocab: [
       { word: 'Un café con leche', type: 'phrase', translation: 'A coffee with milk' },
       { word: 'La cuenta, por favor', type: 'phrase', translation: 'The bill, please' },
-      { word: '¿Cuánto es?', type: 'phrase', translation: 'How much is it?' },
-      { word: 'Azúcar / Sacarina', type: 'noun', translation: 'Sugar / Sweetener' },
+      { word: '¿Tienen bocadillos?', type: 'phrase', translation: 'Do you have sandwiches?' },
     ],
     botPersona: {
       name: 'Camarero',
@@ -334,11 +316,15 @@ const INITIAL_SCENARIOS = [
     icon: <ShoppingBag className="w-6 h-6" />,
     description: 'Preguntar tallas, precios y probadores.',
     color: 'bg-pink-500',
+    objectives: [
+      { id: 'obj_ask_size', text: 'Pedir una talla específica' },
+      { id: 'obj_ask_price', text: 'Preguntar el precio' },
+      { id: 'obj_try_on', text: 'Pedir probarse la ropa' }
+    ],
     vocab: [
       { word: 'Probador', type: 'noun', translation: 'Fitting room' },
       { word: 'Talla M / L', type: 'noun', translation: 'Size M / L' },
       { word: '¿Tiene otro color?', type: 'phrase', translation: 'Do you have another color?' },
-      { word: 'Me queda grande', type: 'phrase', translation: 'It is too big for me' },
       { word: 'Es barato / caro', type: 'adjective', translation: 'It is cheap / expensive' },
     ],
     botPersona: {
@@ -357,12 +343,16 @@ const INITIAL_SCENARIOS = [
     icon: <MapPin className="w-6 h-6" />,
     description: 'Preguntar direcciones, ubicaciones y distancias.',
     color: 'bg-cyan-500',
+    objectives: [
+      { id: 'obj_ask_place', text: 'Preguntar por un lugar específico' },
+      { id: 'obj_clarify', text: 'Pedir que aclare una indicación' },
+      { id: 'obj_thank', text: 'Agradecer la ayuda' }
+    ],
     vocab: [
       { word: 'Perdona / Disculpa', type: 'phrase', translation: 'Excuse me' },
       { word: '¿Dónde está...?', type: 'phrase', translation: 'Where is...?' },
       { word: 'Todo recto', type: 'phrase', translation: 'Straight ahead' },
       { word: 'Gira a la izquierda', type: 'phrase', translation: 'Turn left' },
-      { word: 'A la derecha', type: 'phrase', translation: 'To the right' },
     ],
     botPersona: {
       name: 'Peatón',
@@ -382,6 +372,11 @@ const INITIAL_SCENARIOS = [
     icon: <Stethoscope className="w-6 h-6" />,
     description: 'Describir síntomas, dolor y pedir recetas.',
     color: 'bg-emerald-500',
+    objectives: [
+      { id: 'obj_symptoms', text: 'Describir tus síntomas principales' },
+      { id: 'obj_duration', text: 'Indicar la duración del malestar' },
+      { id: 'obj_prescription', text: 'Pedir una receta o consejo' }
+    ],
     vocab: [
       { word: 'Me duele la cabeza', type: 'phrase', translation: 'I have a headache' },
       { word: 'Tengo fiebre', type: 'phrase', translation: 'I have a fever' },
@@ -404,6 +399,11 @@ const INITIAL_SCENARIOS = [
     icon: <Landmark className="w-6 h-6" />,
     description: 'Abrir cuentas, tarjetas perdidas y transferencias.',
     color: 'bg-blue-700',
+    objectives: [
+      { id: 'obj_open_account', text: 'Solicitar abrir una cuenta' },
+      { id: 'obj_fees', text: 'Preguntar por las comisiones' },
+      { id: 'obj_card', text: 'Preguntar por la tarjeta' }
+    ],
     vocab: [
       { word: 'Abrir una cuenta', type: 'verb', translation: 'To open an account' },
       { word: 'Comisiones', type: 'noun', translation: 'Fees/Commissions' },
@@ -426,6 +426,11 @@ const INITIAL_SCENARIOS = [
     icon: <Key className="w-6 h-6" />,
     description: 'Negociar condiciones, fianza y gastos.',
     color: 'bg-teal-600',
+    objectives: [
+      { id: 'obj_price', text: 'Confirmar precio y fianza' },
+      { id: 'obj_bills', text: 'Preguntar si los gastos están incluidos' },
+      { id: 'obj_visit', text: 'Concertar una visita' }
+    ],
     vocab: [
       { word: 'Fianza', type: 'noun', translation: 'Deposit' },
       { word: 'Gastos incluidos', type: 'phrase', translation: 'Bills included' },
@@ -448,8 +453,13 @@ const INITIAL_SCENARIOS = [
     title: 'Entrevista de Trabajo',
     difficulty: ['C1'],
     icon: <Briefcase className="w-6 h-6" />,
-    description: 'Experiencia laboral, fortalezas y negociación.',
+    description: 'Demuestra tu valía profesional.',
     color: 'bg-slate-700',
+    objectives: [
+      { id: 'obj_introduce', text: 'Presentarte profesionalmente' },
+      { id: 'obj_strengths', text: 'Describir tus puntos fuertes' },
+      { id: 'obj_questions', text: 'Hacer una pregunta sobre el puesto' }
+    ],
     vocab: [
       { word: 'Experiencia laboral', type: 'noun', translation: 'Work experience' },
       { word: 'Puntos fuertes', type: 'noun', translation: 'Strengths' },
@@ -471,11 +481,16 @@ const INITIAL_SCENARIOS = [
     icon: <ShieldAlert className="w-6 h-6" />,
     description: 'Reportar robos, describir sospechosos y trámites legales.',
     color: 'bg-indigo-900',
+    objectives: [
+      { id: 'obj_report', text: 'Explicar motivo de la denuncia' },
+      { id: 'obj_details', text: 'Describir los hechos detalladamente' },
+      { id: 'obj_items', text: 'Listar los objetos robados' }
+    ],
     vocab: [
       { word: 'Poner una denuncia', type: 'phrase', translation: 'To file a report' },
       { word: 'Me han robado', type: 'phrase', translation: 'I have been robbed' },
-      { word: 'Cartera / Móvil', type: 'noun', translation: 'Wallet / Phone' },
       { word: 'Testigo', type: 'noun', translation: 'Witness' },
+      { word: 'Sospechoso', type: 'noun', translation: 'Suspect' },
     ],
     botPersona: {
       name: 'Policía',
@@ -489,7 +504,7 @@ const INITIAL_SCENARIOS = [
 
 // --- COMPONENTS ---
 
-// Helper to safely render content that might be an object
+// Helper to safely render content
 const SafeRender = ({ content }) => {
   if (typeof content === 'string' || typeof content === 'number') return content;
   if (typeof content === 'object') return JSON.stringify(content);
@@ -598,53 +613,54 @@ const LevelBadge = ({ level, selected, onClick }) => {
   );
 };
 
-const FeedbackModal = ({ isOpen, onClose, data }) => {
-  if (!isOpen || !data) return null;
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 animate-in fade-in zoom-in duration-300">
-        <div className="text-center mb-6">
-          <div className="inline-block p-3 bg-indigo-100 rounded-full mb-3">
-            <FileText className="w-8 h-8 text-indigo-600" />
-          </div>
-          <h2 className="text-2xl font-bold text-gray-800">Evaluación de la Sesión</h2>
-          <p className="text-gray-500">Aquí tienes tu informe de progreso</p>
-        </div>
+const ObjectiveItem = ({ objective, onConfirm, onReject }) => {
+  const { status, text, evidence, reason } = objective;
 
-        <div className="flex items-center justify-center gap-4 mb-6">
-          <div className="text-center p-4 bg-gray-50 rounded-xl border border-gray-100">
-            <div className="text-3xl font-bold text-indigo-600">{data.score}/10</div>
-            <div className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Puntuación</div>
-          </div>
-        </div>
-
-        <div className="space-y-4 mb-6">
-          <div>
-            <h4 className="text-sm font-bold text-green-700 flex items-center gap-2 mb-2">
-              <CheckCircle size={16} /> Lo mejor
-            </h4>
-            <ul className="text-sm text-gray-600 list-disc list-inside space-y-1 bg-green-50 p-3 rounded-lg">
-              {data.goodPoints && data.goodPoints.map((p, i) => <li key={i}><SafeRender content={p} /></li>)}
-            </ul>
-          </div>
-          <div>
-            <h4 className="text-sm font-bold text-orange-700 flex items-center gap-2 mb-2">
-              <AlertCircle size={16} /> A mejorar
-            </h4>
-            <ul className="text-sm text-gray-600 list-disc list-inside space-y-1 bg-orange-50 p-3 rounded-lg">
-              {data.corrections && data.corrections.map((c, i) => <li key={i}><SafeRender content={c} /></li>)}
-            </ul>
-          </div>
-        </div>
-
-        <div className="bg-indigo-50 p-4 rounded-lg text-sm text-indigo-800 italic text-center mb-6">
-          "<SafeRender content={data.comment} />"
-        </div>
-
-        <button onClick={onClose} className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-colors">
-          ¡Entendido!
-        </button>
+  if (status === 'confirmed') {
+    return (
+      <div className="flex items-start gap-3 p-3 rounded-lg border bg-green-50 border-green-200 transition-all">
+        <div className="mt-0.5 text-green-500"><CheckSquare size={18} /></div>
+        <span className="text-sm text-green-800 line-through decoration-green-300">{text}</span>
       </div>
+    );
+  }
+
+  if (status === 'possible') {
+    return (
+      <div className="flex flex-col gap-2 p-3 rounded-lg border bg-yellow-50 border-yellow-200 transition-all animate-in fade-in zoom-in duration-300">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 text-yellow-600"><AlertCircle size={18} /></div>
+          <span className="text-sm text-yellow-900 font-medium">{text}</span>
+        </div>
+        
+        <div className="text-xs text-yellow-800 bg-yellow-100/50 p-2 rounded ml-1 border-l-2 border-yellow-400">
+          <p className="font-semibold mb-1">Evidencia:</p>
+          <p className="italic">"{evidence}"</p>
+          {reason && <p className="opacity-75 mt-1">({reason})</p>}
+        </div>
+
+        <div className="flex gap-2 mt-1 justify-end">
+          <button 
+            onClick={() => onReject(objective.id)}
+            className="px-2 py-1.5 bg-white text-red-600 text-xs rounded shadow-sm hover:bg-red-50 border border-red-100 flex items-center gap-1 transition-colors"
+          >
+            <ThumbsDown size={12} /> No era eso
+          </button>
+          <button 
+            onClick={() => onConfirm(objective.id)}
+            className="px-3 py-1.5 bg-green-600 text-white text-xs font-bold rounded shadow-sm hover:bg-green-700 flex items-center gap-1 transition-colors"
+          >
+            <CheckCircle size={12} /> ¡Sí, conseguido!
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-start gap-3 p-3 rounded-lg border bg-white border-gray-200">
+      <div className="mt-0.5 text-gray-300"><Square size={18} /></div>
+      <span className="text-sm text-gray-600">{text}</span>
     </div>
   );
 };
@@ -659,16 +675,12 @@ export default function App() {
   const [isVocabOpen, setIsVocabOpen] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
-  
-  // Custom Scenario State
+  const [currentObjectives, setCurrentObjectives] = useState([]);
+
+  // Create Scenario State
   const [isCreatingScenario, setIsCreatingScenario] = useState(false);
   const [customTopic, setCustomTopic] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
-
-  // Feedback State
-  const [showFeedback, setShowFeedback] = useState(false);
-  const [feedbackData, setFeedbackData] = useState(null);
-  const [isGeneratingFeedback, setIsGeneratingFeedback] = useState(false);
 
   const messagesEndRef = useRef(null);
 
@@ -692,10 +704,16 @@ export default function App() {
     setScreen('chat');
     setIsVocabOpen(window.innerWidth >= 1024);
     setErrorMsg(null);
-    setShowFeedback(false);
-    setFeedbackData(null);
     
-    // Check if initial message is object (standard) or string (custom)
+    // Init Objectives
+    const sessionObjectives = (scenario.objectives || []).map(obj => ({
+      ...obj, 
+      status: 'pending',
+      evidence: '',
+      reason: ''
+    }));
+    setCurrentObjectives(sessionObjectives);
+    
     let intro = "";
     if (typeof scenario.botPersona.initialMessage === 'string') {
         intro = scenario.botPersona.initialMessage;
@@ -717,8 +735,24 @@ export default function App() {
     setErrorMsg(null);
 
     try {
-      const response = await callGeminiChat(messages, selectedScenario, selectedLevelId, userMsg.text);
-      const botMsg = { id: Date.now() + 1, sender: 'bot', text: response };
+      const responseData = await callGeminiChat(messages, selectedScenario, selectedLevelId, userMsg.text, currentObjectives);
+      
+      if (responseData.objective_updates && responseData.objective_updates.length > 0) {
+        setCurrentObjectives(prev => prev.map(obj => {
+          const update = responseData.objective_updates.find(u => u.id === obj.id);
+          if (update && obj.status !== 'confirmed') {
+            return { 
+              ...obj, 
+              status: 'possible', 
+              evidence: update.evidence, 
+              reason: update.reason 
+            };
+          }
+          return obj;
+        }));
+      }
+
+      const botMsg = { id: Date.now() + 1, sender: 'bot', text: responseData.reply };
       setMessages(prev => [...prev, botMsg]);
     } catch (err) {
       console.error(err);
@@ -726,6 +760,27 @@ export default function App() {
     } finally {
       setIsTyping(false);
     }
+  };
+
+  // Objective Handlers
+  const handleConfirmObjective = (id) => {
+    setCurrentObjectives(prev => prev.map(obj => 
+      obj.id === id ? { ...obj, status: 'confirmed' } : obj
+    ));
+  };
+
+  const handleRejectObjective = (id) => {
+    setCurrentObjectives(prev => prev.map(obj => 
+      obj.id === id ? { ...obj, status: 'pending', evidence: '', reason: '' } : obj
+    ));
+  };
+
+  const handleCorrectionRequest = async (text) => {
+    return await callGeminiCorrection(text, selectedLevelId);
+  };
+
+  const handleVocabSelect = (word) => {
+    setInputText(prev => prev + (prev ? ' ' : '') + word);
   };
 
   const handleCreateScenario = async (e) => {
@@ -739,9 +794,8 @@ export default function App() {
     setIsGenerating(true);
     try {
       const newScenario = await callGeminiScenarioGen(customTopic, selectedLevelId);
-      // Post-process to ensure it has correct structure for UI
       newScenario.difficulty = [selectedLevelId]; 
-      newScenario.icon = <Sparkles className="w-6 h-6" />; // Default icon for custom
+      newScenario.icon = <Sparkles className="w-6 h-6" />;
       
       setScenarios(prev => [newScenario, ...prev]);
       setIsCreatingScenario(false);
@@ -754,34 +808,12 @@ export default function App() {
     }
   };
 
-  const handleEndSession = async () => {
-    if (!apiKey || messages.length < 3) {
-      setScreen('home');
-      return;
-    }
-    
-    setIsGeneratingFeedback(true);
-    const feedback = await callGeminiFeedback(messages, selectedLevelId);
-    setFeedbackData(feedback);
-    setIsGeneratingFeedback(false);
-    if (feedback) setShowFeedback(true);
-    else setScreen('home');
-  };
-
-  const handleCorrectionRequest = async (text) => {
-    return await callGeminiCorrection(text, selectedLevelId);
-  };
-
-  // Restored function
-  const handleVocabSelect = (word) => {
-    setInputText(prev => prev + (prev ? ' ' : '') + word);
-  };
-
   // --- RENDER: HOME SCREEN ---
   if (screen === 'home') {
     return (
       <div className="min-h-screen bg-gray-50 font-sans">
-        {/* Scenario Creator Modal */}
+        
+        {/* Create Scenario Modal */}
         {isCreatingScenario && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
@@ -801,7 +833,7 @@ export default function App() {
                   <button 
                     type="submit" 
                     disabled={isGenerating || !customTopic}
-                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg flex items-center gap-2 disabled:opacity-50"
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg flex items-center gap-2 disabled:opacity-50 hover:bg-indigo-700"
                   >
                     {isGenerating ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
                     {isGenerating ? 'Creando...' : 'Generar'}
@@ -820,7 +852,7 @@ export default function App() {
               </div>
               <div>
                 <h1 className="text-xl font-bold text-gray-800 leading-none">Hablemos</h1>
-                <span className="text-xs text-indigo-600 font-medium">Práctica de Español</span>
+                <span className="text-xs text-indigo-600 font-medium">Práctica de Español con IA</span>
               </div>
             </div>
             
@@ -854,7 +886,6 @@ export default function App() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {/* Create New Card */}
               <div 
                 onClick={() => setIsCreatingScenario(true)}
                 className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl shadow-md border-0 overflow-hidden cursor-pointer transition-all hover:-translate-y-1 hover:shadow-lg flex flex-col items-center justify-center text-white p-6 group min-h-[200px]"
@@ -899,16 +930,7 @@ export default function App() {
   // --- RENDER: CHAT SCREEN ---
   return (
     <div className="h-screen bg-gray-100 flex flex-col md:flex-row overflow-hidden font-sans">
-      <FeedbackModal isOpen={showFeedback} onClose={() => setScreen('home')} data={feedbackData} />
       
-      {/* Loading Overlay for Feedback */}
-      {isGeneratingFeedback && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex flex-col items-center justify-center z-50 text-white">
-          <Loader2 className="w-12 h-12 animate-spin mb-4" />
-          <p className="font-bold text-lg">Analizando conversación...</p>
-        </div>
-      )}
-
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col h-full relative z-0">
         <header className="bg-white px-4 py-3 border-b flex items-center justify-between shrink-0 shadow-sm z-10">
@@ -924,17 +946,11 @@ export default function App() {
           
           <div className="flex gap-2">
             <button 
-              onClick={handleEndSession}
-              className="px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-bold hover:bg-red-100 transition-colors flex items-center gap-1"
-            >
-              <X size={14} /> Finalizar
-            </button>
-            <button 
               onClick={() => setIsVocabOpen(!isVocabOpen)}
               className={`p-2 rounded-lg flex items-center gap-2 transition-colors ${isVocabOpen ? 'bg-indigo-100 text-indigo-700' : 'hover:bg-gray-100 text-gray-600'}`}
             >
-              <BookOpen size={20} />
-              <span className="hidden sm:inline font-medium text-sm">Léxico</span>
+              <Target size={20} />
+              <span className="hidden sm:inline font-medium text-sm">Misión</span>
             </button>
           </div>
         </header>
@@ -983,30 +999,55 @@ export default function App() {
         </div>
       </div>
 
-      {/* Vocabulary Sidebar */}
+      {/* Sidebar: Objectives & Vocabulary */}
       <div className={`fixed inset-y-0 right-0 w-80 bg-white border-l shadow-2xl transform transition-transform duration-300 ease-in-out z-20 md:relative md:transform-none md:shadow-none ${
         isVocabOpen ? 'translate-x-0' : 'translate-x-full md:hidden'
       }`}>
         <div className="h-full flex flex-col">
           <div className="p-4 border-b flex items-center justify-between bg-gray-50">
             <div className="flex items-center gap-2 text-gray-800 font-semibold">
-              <BookOpen size={18} className="text-indigo-600" />
-              <h3>Ayuda</h3>
+              <Target size={18} className="text-indigo-600" />
+              <h3>Tu Misión</h3>
             </div>
             <button onClick={() => setIsVocabOpen(false)} className="md:hidden text-gray-500 hover:bg-gray-200 rounded p-1">
               <X size={20} />
             </button>
           </div>
           
-          <div className="flex-1 overflow-y-auto p-4">
-            <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3 mb-4 text-xs text-indigo-800 flex items-start gap-2">
-              <Info size={14} className="mt-0.5 shrink-0" />
-              <p>Nivel {selectedLevelId}: Usa estas frases.</p>
-            </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-6">
             
-            {selectedScenario?.vocab.map((item, index) => (
-              <VocabularyItem key={index} item={item} onSelect={handleVocabSelect} />
-            ))}
+            {/* Objectives Section */}
+            <div>
+              <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-1">
+                Objetivos Comunicativos
+              </h4>
+              <div className="space-y-3">
+                {currentObjectives && currentObjectives.map((obj) => (
+                  <ObjectiveItem 
+                    key={obj.id} 
+                    objective={obj} 
+                    onConfirm={handleConfirmObjective}
+                    onReject={handleRejectObjective}
+                  />
+                ))}
+                {(!currentObjectives || currentObjectives.length === 0) && (
+                  <p className="text-sm text-gray-400 italic">No hay objetivos definidos para este escenario.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Vocab Section */}
+            <div>
+              <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-1">
+                <BookOpen size={14} /> Léxico Útil
+              </h4>
+              <div className="space-y-1">
+                {selectedScenario?.vocab.map((item, index) => (
+                  <VocabularyItem key={index} item={item} onSelect={handleVocabSelect} />
+                ))}
+              </div>
+            </div>
+
           </div>
         </div>
       </div>
