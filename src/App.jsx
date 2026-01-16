@@ -81,6 +81,9 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
     return {
       reply: typeof data?.reply === "string" ? data.reply : "No pude generar respuesta.",
       objective_updates: Array.isArray(data?.objective_updates) ? data.objective_updates : [],
+      completed_objective_ids: Array.isArray(data?.completed_objective_ids)
+        ? data.completed_objective_ids
+        : [],
       follow_up_question: typeof data?.follow_up_question === "string" ? data.follow_up_question : ""
     };
   } catch (err) {
@@ -427,6 +430,14 @@ export default function App() {
         }));
       }
 
+      if (responseData.completed_objective_ids && responseData.completed_objective_ids.length > 0) {
+        setCurrentObjectives(prev => prev.map(obj => (
+          responseData.completed_objective_ids.includes(obj.id)
+            ? { ...obj, status: 'confirmed' }
+            : obj
+        )));
+      }
+
       const botMsg = { id: Date.now() + 1, sender: 'bot', text: responseData.reply };
       setMessages(prev => [...prev, botMsg]);
     } catch (err) {
@@ -711,4 +722,3 @@ export default function App() {
     </div>
   );
 }
-
