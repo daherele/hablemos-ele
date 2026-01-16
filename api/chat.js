@@ -1,6 +1,5 @@
 // /api/chat.js
 export default async function handler(req, res) {
-  // Solo POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -26,10 +25,8 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing userMessage" });
     }
 
-    // Historial corto y seguro
     const shortHistory = Array.isArray(history) ? history.slice(-6) : [];
 
-    // Objetivos en texto (servidor)
     const objectivesList = (Array.isArray(currentObjectives) ? currentObjectives : [])
       .map((o) => {
         const id = String(o?.id ?? "");
@@ -79,10 +76,11 @@ Devuelve SOLO:
 REGLA PARA completed_objective_ids:
 - Incluye SOLO los IDs de objetivos que el alumno ACABA de cumplir con SU ÚLTIMO MENSAJE.
 - Si ninguno, devuelve [].
+
+IMPORTANTE: No incluyas texto fuera del JSON. No uses \`\`\` ni comentarios. Solo un objeto JSON válido.
 `.trim();
 
     const contents = [
-      { role: "user", parts: [{ text: systemPrompt }] },
       ...shortHistory.map((msg) => ({
         role: msg?.sender === "user" ? "user" : "model",
         parts: [{ text: String(msg?.text ?? "") }]
@@ -91,15 +89,16 @@ REGLA PARA completed_objective_ids:
     ];
 
     const geminiResp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
+      // Modelo más estable para empezar
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] },
           contents,
           generationConfig: {
             responseMimeType: "application/json",
-            // Opcional (pero ayuda a que no se vaya por las ramas)
             temperature: 0.4,
             maxOutputTokens: 220
           }
@@ -116,28 +115,39 @@ REGLA PARA completed_objective_ids:
       });
     }
 
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    // Une todos los parts
+    const parts = data?.candidates?.[0]?.content?.parts ?? [];
+    const textRaw = parts.map((p) => p?.text ?? "").join("").trim();
 
-    // Intentamos parsear JSON; si falla, devolvemos texto “seguro”
+    const cleaned = String(textRaw)
+      .trim()
+      .replace(/^```json\s*/i, "")
+      .replace(/```$/i, "")
+      .trim();
+
+    const firstBrace = cleaned.indexOf("{");
+    const lastBrace = cleaned.lastIndexOf("}");
+    const jsonCandidate =
+      firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace
+        ? cleaned.slice(firstBrace, lastBrace + 1)
+        : cleaned;
+
     try {
-      const parsed = JSON.parse(text);
+      const parsed = JSON.parse(jsonCandidate);
 
-      // Normaliza salida por si viene rara
       const reply = typeof parsed?.reply === "string" ? parsed.reply : "No pude generar respuesta.";
-      const ids = Array.isArray(parsed?.completed_objective_ids) ? parsed.completed_objective_ids : [];
+      const ids = Array.isArray(parsed?.completed_objective_ids)
+        ? parsed.completed_objective_ids
+        : [];
 
-      return res.status(200).json({
-        reply,
-        completed_objective_ids: ids
-      });
-    } catch {
-      return res.status(200).json({
-        reply: typeof text === "string" ? text : "No pude generar respuesta.",
-        completed_objective_ids: []
+      return res.status(200).json({ reply, completed_objective_ids: ids });
+    } catch (e) {
+      return res.status(500).json({
+        error: "Invalid JSON from model",
+        debug_raw: cleaned.slice(0, 700)
       });
     }
   } catch (err) {
-    return res.status(500).json({ error: "Server error", details: String(err) });
+    return res.status(500).json({ error: "Server error", details: String(err?.message || err) });
   }
 }
-
