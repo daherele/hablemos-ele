@@ -89,10 +89,22 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
   }
 };
 
-// 🚫 Desactivadas por ahora (por seguridad) hasta que tengas endpoints backend
-const callGeminiCorrection = async () => {
-  return "🔒 Corrección desactivada por seguridad (mueve esta función a /api/correct).";
+// ✅ Corrección vía backend
+const callGeminiCorrection = async (text, level) => {
+  const data = await postJSON("/api/correct", { text, level });
+
+  // Tu backend devuelve: { corrected, explanation }
+  const corrected = typeof data?.corrected === "string" ? data.corrected : "";
+  const explanation = typeof data?.explanation === "string" ? data.explanation : "";
+
+  // Lo que muestras en la UI (feedback) puede ser texto formateado
+  if (corrected && explanation) return `✅ ${corrected}\n💡 ${explanation}`;
+  if (corrected) return `✅ ${corrected}`;
+  if (explanation) return `💡 ${explanation}`;
+
+  return "No pude corregir ahora mismo.";
 };
+
 const callGeminiScenarioGen = async () => {
   throw new Error("🔒 Generación de escenarios desactivada por seguridad (mueve a /api/scenario).");
 };
@@ -231,7 +243,7 @@ const ChatMessage = ({ message, isUser, onCorrect, isLast }) => {
               onClick={handleCorrection}
               disabled={isCorrecting}
               className="text-xs text-indigo-500 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-full flex items-center gap-1 transition-colors border border-indigo-100"
-              title="Corrección desactivada por seguridad (mover a backend)"
+              title="Corregir tu último mensaje"
             >
               {isCorrecting ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
               <span>Corregir</span>
