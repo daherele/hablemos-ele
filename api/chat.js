@@ -132,4 +132,33 @@ No añadas ningún texto antes o después.
     const firstBrace = cleaned.indexOf("{");
     const lastBrace = cleaned.lastIndexOf("}");
     const jsonCandidate =
-      firstBrace !== -1 &&
+      firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace
+        ? cleaned.slice(firstBrace, lastBrace + 1)
+        : cleaned;
+
+    try {
+      const parsed = JSON.parse(jsonCandidate);
+
+      const reply =
+        typeof parsed?.reply === "string" && parsed.reply.trim()
+          ? parsed.reply.trim()
+          : "No pude generar respuesta.";
+
+      const ids = Array.isArray(parsed?.completed_objective_ids)
+        ? parsed.completed_objective_ids.map(String)
+        : [];
+
+      return res.status(200).json({
+        reply,
+        completed_objective_ids: ids
+      });
+    } catch (e) {
+      return res.status(500).json({
+        error: "Invalid JSON from model",
+        debug_raw: cleaned.slice(0, 700)
+      });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: "Server error", details: String(err?.message || err) });
+  }
+}
