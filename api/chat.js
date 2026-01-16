@@ -54,7 +54,6 @@ function getLevelRules(level) {
 }
 
 function getSentenceLimits(level) {
-  // Límite distinto según haya reformulación o no
   if (level === "A1") return { withReformulation: 3, withoutReformulation: 2 };
   if (level === "A2") return { withReformulation: 3, withoutReformulation: 2 };
   if (level === "B1") return { withReformulation: 4, withoutReformulation: 3 };
@@ -70,7 +69,6 @@ function getCorrectionMode(level) {
   return "minimal";
 }
 
-// Limpia texto del modelo (por si “se escapa” del formato)
 function cleanModelText(textRaw) {
   return String(textRaw || "")
     .replace(/```json\s*/gi, "")
@@ -81,17 +79,14 @@ function cleanModelText(textRaw) {
     .trim();
 }
 
-// Extrae el primer bloque JSON (objeto o array) del texto
 function extractJsonString(textRaw) {
   const t = cleanModelText(textRaw);
 
-  // 1) Si ya es JSON puro
   try {
     JSON.parse(t);
     return t;
   } catch {}
 
-  // 2) Busca primer {...} o [...]
   const match = t.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
   if (!match) return null;
 
@@ -104,6 +99,21 @@ function extractJsonString(textRaw) {
   }
 }
 
+function isBadReply(reply) {
+  const r = String(reply || "").trim();
+
+  // vacío o demasiado corto (permitimos sí/no/ok)
+  if (r.length < 3 && !/^(sí|no|ok)$/i.test(r)) return true;
+
+  // "Here" / "Here is" típicos
+  if (/^here\b/i.test(r)) return true;
+
+  // señales de inglés muy típicas al inicio
+  if (/^(here|sure|okay|ok|yes|no)\b/i.test(r)) return true;
+
+  return false;
+}
+
 function safeNormalizeParsed(parsed, fallbackText) {
   const reply =
     typeof parsed?.reply === "string" && parsed.reply.trim()
@@ -114,7 +124,7 @@ function safeNormalizeParsed(parsed, fallbackText) {
     ? parsed.completed_objective_ids.map((x) => String(x))
     : [];
 
-  return { reply, completed_objective_ids: ids };
+  return { reply, completed_objective_ids: ids, _badReply: isBadReply(reply) };
 }
 
 // =======================
@@ -132,7 +142,6 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "Missing GEMINI_API_KEY in server env" });
     }
 
-    // 1) Body robusto (en Vercel a veces llega como string)
     let body = req.body;
     if (typeof body === "string") {
       try {
@@ -158,7 +167,6 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing userMessage" });
     }
 
-    // 2) Historial corto y limpio (quita "(Demo)")
     const shortHistory = (Array.isArray(history) ? history : [])
       .slice(-6)
       .map((m) => ({
@@ -175,11 +183,9 @@ export default async function handler(req, res) {
       })
       .join("\n");
 
-    // ✅ Dinámicos por nivel (dependen del body)
     const sentenceLimits = getSentenceLimits(level);
     const correctionMode = getCorrectionMode(level);
 
-    // Prompt del sistema
     const baseSystemPrompt = `
 Actúa como un interlocutor nativo en un escenario de práctica de español.
 
@@ -200,7 +206,6 @@ REGLAS GENERALES:
 - Interpreta con buena fe.
 - El valor de "reply" debe estar SIEMPRE en español. Prohibido usar inglés (por ejemplo: "Here", "Here is", etc.).
 - Si estás a punto de escribir una palabra en inglés, en su lugar escribe: "Perdón, ¿puedes repetirlo?"
-
 
 LÍMITE DE FRASES:
 - Si HAY reformulación: máximo ${sentenceLimits.withReformulation} frase(s).
@@ -238,9 +243,7 @@ PROHIBIDO:
 - Markdown o \`\`\`
 - Frases tipo "Here is..."
 `.trim();
-    
 
-    // Contenido para Gemini
     const contents = [
       ...shortHistory.map((msg) => ({
         role: msg?.sender === "user" ? "user" : "model",
@@ -251,7 +254,12 @@ PROHIBIDO:
 
     async function callGemini({ strict = false } = {}) {
       const systemPrompt = strict
-        ? `${baseSystemPrompt}\n\nULTIMA REGLA: el primer carácter de tu respuesta debe ser { y el último }`
+        ? `${baseSystemPrompt}
+
+REGLA FINAL (OBLIGATORIA):
+- Si reply contiene cualquier palabra en inglés (por ejemplo "Here"), debes devolver:
+  {"reply":"Perdón, ¿puedes repetirlo?","completed_objective_ids":[]}
+`
         : baseSystemPrompt;
 
       const url =
@@ -278,8 +286,10 @@ PROHIBIDO:
                 },
                 required: ["reply", "completed_objective_ids"]
               },
-              temperature: strict ? 0.1 : (level === "A1" ? 0.2 : level === "A2" ? 0.25 : 0.4),
-              maxOutputTokens: (level === "A1" ? 120 : level === "A2" ? 140 : level === "B1" ? 180 : 260),
+              temperature: strict ? 0.05 : (level === "A1" ? 0.2 : level === "A2" ? 0.25 : 0.4),
+              maxOutputTokens: strict
+                ? (level === "A1" ? 90 : level === "A2" ? 110 : 160)
+                : (level === "A1" ? 120 : level === "A2" ? 140 : level === "B1" ? 180 : 260),
             }
           })
         });
@@ -304,7 +314,6 @@ PROHIBIDO:
 
     // -------- Lógica principal --------
 
-    // Intento normal
     const out = await callGemini({ strict: false });
     if (!out.ok) {
       return res.status(out.status).json({ error: "Gemini API error", details: out.data });
@@ -320,36 +329,59 @@ PROHIBIDO:
       }
       jsonStr = extractJsonString(out2.textRaw);
 
-      // Si sigue sin JSON, NO rompas el chat
       if (!jsonStr) {
         const fallbackReply = cleanModelText(out2.textRaw);
         return res.status(200).json({
-          reply: fallbackReply || "Perdón, ¿qué quieres hacer ahora?",
+          reply: fallbackReply || "Perdón, ¿puedes repetirlo?",
           completed_objective_ids: []
         });
       }
 
-      // Parse del segundo intento
       try {
         const parsed2 = JSON.parse(jsonStr);
-        return res.status(200).json(safeNormalizeParsed(parsed2, out2.textRaw));
+        const norm2 = safeNormalizeParsed(parsed2, out2.textRaw);
+
+        if (norm2._badReply) {
+          return res.status(200).json({ reply: "Perdón, ¿puedes repetirlo?", completed_objective_ids: [] });
+        }
+
+        return res.status(200).json({ reply: norm2.reply, completed_objective_ids: norm2.completed_objective_ids });
       } catch {
         const fallbackReply = cleanModelText(out2.textRaw);
         return res.status(200).json({
-          reply: fallbackReply || "Perdón, ¿qué quieres hacer ahora?",
+          reply: fallbackReply || "Perdón, ¿puedes repetirlo?",
           completed_objective_ids: []
         });
       }
     }
 
-    // Parse del primer intento
+    // Parse del primer intento (con reintento si "reply" es malo)
     try {
       const parsed = JSON.parse(jsonStr);
-      return res.status(200).json(safeNormalizeParsed(parsed, out.textRaw));
+      const norm = safeNormalizeParsed(parsed, out.textRaw);
+
+      if (norm._badReply) {
+        const out2 = await callGemini({ strict: true });
+        if (out2.ok) {
+          const jsonStr2 = extractJsonString(out2.textRaw);
+          if (jsonStr2) {
+            try {
+              const parsed2 = JSON.parse(jsonStr2);
+              const norm2 = safeNormalizeParsed(parsed2, out2.textRaw);
+              if (!norm2._badReply) {
+                return res.status(200).json({ reply: norm2.reply, completed_objective_ids: norm2.completed_objective_ids });
+              }
+            } catch {}
+          }
+        }
+        return res.status(200).json({ reply: "Perdón, ¿puedes repetirlo?", completed_objective_ids: [] });
+      }
+
+      return res.status(200).json({ reply: norm.reply, completed_objective_ids: norm.completed_objective_ids });
     } catch {
       const fallbackReply = cleanModelText(out.textRaw);
       return res.status(200).json({
-        reply: fallbackReply || "Perdón, ¿qué quieres hacer ahora?",
+        reply: fallbackReply || "Perdón, ¿puedes repetirlo?",
         completed_objective_ids: []
       });
     }
