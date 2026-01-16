@@ -383,6 +383,20 @@ const responseData = await callGeminiChat(
   currentObjectives
 );
 
+      // ✅ Objetivos: sistema robusto (no rompe si el backend no manda nada)
+const completedIds = Array.isArray(responseData?.completed_objective_ids)
+  ? responseData.completed_objective_ids
+  : [];
+
+if (completedIds.length > 0) {
+  setCurrentObjectives(prev =>
+    prev.map(obj =>
+      completedIds.includes(obj.id)
+        ? { ...obj, status: "confirmed" }
+        : obj
+    )
+  );
+}
 
 
       if (responseData.objective_updates && responseData.objective_updates.length > 0) {
