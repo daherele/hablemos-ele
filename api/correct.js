@@ -10,7 +10,19 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "Missing GEMINI_API_KEY in server env" });
     }
 
-    const { text, level = "A1" } = req.body || {};
+    // Body robusto (en Vercel a veces llega como string)
+    let body = req.body;
+    if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        body = {};
+      }
+    }
+    body = body || {};
+
+    const { text, level = "A1" } = body;
+
     if (!text || typeof text !== "string") {
       return res.status(400).json({ error: "Missing text" });
     }
@@ -22,16 +34,15 @@ OBJETIVO:
 - Corrige la frase del alumno para que sea natural y adecuada al nivel ${level}.
 - Da una explicación MUY breve (máx. 1 frase) en español.
 
-FORMATO:
-Devuelve SOLO un JSON con las claves:
-{
-  "corrected": "frase corregida",
-  "explanation": "explicación breve"
-}
+FORMATO (OBLIGATORIO):
+Devuelve SOLO un JSON válido con las claves:
+- corrected (string)
+- explanation (string)
 
 PROHIBIDO:
-- Escribir “Here is the JSON…”
-- Usar \`\`\` o bloques de código
+- Texto fuera del JSON
+- Markdown o \`\`\`
+- Escribir “Here is...”
 `.trim();
 
     const contents = [
@@ -40,22 +51,43 @@ PROHIBIDO:
 
     function cleanModelText(textRaw) {
       return String(textRaw || "")
-        .replace(/```json/gi, "")
+        .replace(/```json\s*/gi, "")
         .replace(/```/g, "")
-        .replace(/^Here is the JSON requested:\s*/i, "")
-        .replace(/^Here is the JSON:\s*/i, "")
-        .replace(/^Here is\s*/i, "")
+        .replace(/^\s*Here is the JSON requested:\s*/i, "")
+        .replace(/^\s*Here is the JSON:\s*/i, "")
+        .replace(/^\s*Here is\s*/i, "")
         .trim();
     }
 
-    function tryExtractJson(textRaw) {
-      const cleaned = cleanModelText(textRaw);
-      const firstBrace = cleaned.indexOf("{");
-      const lastBrace = cleaned.lastIndexOf("}");
-      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        return cleaned.slice(firstBrace, lastBrace + 1);
+    // Extrae el primer bloque JSON (objeto o array) del texto, y valida que sea parseable
+    function extractJsonString(textRaw) {
+      const t = cleanModelText(textRaw);
+
+      // 1) Si ya es JSON puro
+      try {
+        JSON.parse(t);
+        return t;
+      } catch {}
+
+      // 2) Busca primer bloque {...} o [...]
+      const match = t.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+      if (!match) return null;
+
+      const candidate = match[1].trim();
+      try {
+        JSON.parse(candidate);
+        return candidate;
+      } catch {
+        return null;
       }
-      return null;
+    }
+
+    function oneSentence(text) {
+      const s = String(text || "").trim();
+      if (!s) return "";
+      // Corta a la primera frase si mete más de una
+      const cut = s.match(/^(.+?[.!?])(\s|$)/);
+      return (cut ? cut[1] : s).trim();
     }
 
     async function callGemini({ strict = false } = {}) {
@@ -63,9 +95,12 @@ PROHIBIDO:
         ? `${baseSystemInstruction}\n\nULTIMA REGLA: el primer carácter de tu respuesta debe ser { y el último }`
         : baseSystemInstruction;
 
-      const r = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-        {
+      const url =
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+
+      let r;
+      try {
+        r = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -85,16 +120,32 @@ PROHIBIDO:
               maxOutputTokens: 180
             }
           })
-        }
-      );
+        });
+      } catch (e) {
+        return {
+          ok: false,
+          status: 502,
+          data: { error: "Fetch to Gemini failed", details: String(e?.message || e) }
+        };
+      }
 
-      const data = await r.json();
+      let data;
+      try {
+        data = await r.json();
+      } catch (e) {
+        return {
+          ok: false,
+          status: 502,
+          data: { error: "Gemini returned non-JSON", details: String(e?.message || e) }
+        };
+      }
+
       if (!r.ok) return { ok: false, status: r.status, data };
 
       const parts = data?.candidates?.[0]?.content?.parts ?? [];
       const textRaw = parts.map((p) => p?.text ?? "").join("").trim();
 
-      return { ok: true, textRaw };
+      return { ok: true, textRaw, data };
     }
 
     // 1) intento normal
@@ -103,50 +154,76 @@ PROHIBIDO:
       return res.status(out.status).json({ error: "Gemini API error", details: out.data });
     }
 
-    let jsonCandidate = tryExtractJson(out.textRaw);
+    let jsonStr = extractJsonString(out.textRaw);
 
-    // 2) reintento estricto si no hay JSON
-    if (!jsonCandidate) {
+    // 2) reintento estricto si no hay JSON válido
+    if (!jsonStr) {
       const out2 = await callGemini({ strict: true });
       if (!out2.ok) {
         return res.status(out2.status).json({ error: "Gemini API error", details: out2.data });
       }
-      jsonCandidate = tryExtractJson(out2.textRaw);
+
+      jsonStr = extractJsonString(out2.textRaw);
 
       // Si AÚN no hay JSON: NO rompas la UI → devuelve 200 con fallback
-      if (!jsonCandidate) {
+      if (!jsonStr) {
         const fallback = cleanModelText(out2.textRaw);
+        return res.status(200).json({
+          corrected: text,
+          explanation: oneSentence(fallback) || "No pude corregir ahora mismo."
+        });
+      }
+
+      // Parse del segundo intento
+      try {
+        const parsed2 = JSON.parse(jsonStr);
+
+        const corrected2 =
+          typeof parsed2?.corrected === "string" && parsed2.corrected.trim()
+            ? parsed2.corrected.trim()
+            : text;
+
+        const explanation2 =
+          typeof parsed2?.explanation === "string"
+            ? oneSentence(parsed2.explanation)
+            : "Corrección aplicada.";
 
         return res.status(200).json({
-          // si no podemos corregir, al menos devolvemos el texto original
+          corrected: corrected2,
+          explanation: explanation2 || "Corrección aplicada."
+        });
+      } catch {
+        const fallback = cleanModelText(out2.textRaw);
+        return res.status(200).json({
           corrected: text,
-          explanation: fallback
-            ? `No pude devolver JSON. Respuesta del modelo: ${fallback}`
-            : "No pude corregir ahora mismo."
+          explanation: oneSentence(fallback) || "No pude corregir ahora mismo."
         });
       }
     }
 
-    // Parse final: si falla, NO rompas la UI
+    // Parse del primer intento
     try {
-      const parsed = JSON.parse(jsonCandidate);
+      const parsed = JSON.parse(jsonStr);
 
       const corrected =
-        typeof parsed?.corrected === "string" ? parsed.corrected.trim() : text;
+        typeof parsed?.corrected === "string" && parsed.corrected.trim()
+          ? parsed.corrected.trim()
+          : text;
 
       const explanation =
         typeof parsed?.explanation === "string"
-          ? parsed.explanation.trim()
+          ? oneSentence(parsed.explanation)
           : "Corrección aplicada.";
 
-      return res.status(200).json({ corrected, explanation });
+      return res.status(200).json({
+        corrected,
+        explanation: explanation || "Corrección aplicada."
+      });
     } catch {
       const fallback = cleanModelText(out.textRaw);
       return res.status(200).json({
         corrected: text,
-        explanation: fallback
-          ? `No pude devolver JSON. Respuesta del modelo: ${fallback}`
-          : "No pude corregir ahora mismo."
+        explanation: oneSentence(fallback) || "No pude corregir ahora mismo."
       });
     }
   } catch (err) {
