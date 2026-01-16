@@ -1,5 +1,6 @@
 // /api/chat.js
 export default async function handler(req, res) {
+  // Solo POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -33,6 +34,7 @@ export default async function handler(req, res) {
         text: String(m?.text ?? "").replace(/^\(Demo\)\s*/i, "")
       }));
 
+    // Objetivos en texto (servidor)
     const objectivesList = (Array.isArray(currentObjectives) ? currentObjectives : [])
       .map((o) => {
         const id = String(o?.id ?? "");
@@ -65,9 +67,18 @@ INSTRUCCIONES (MUY IMPORTANTES):
 - Si no cumple un objetivo, responde de forma natural y guía suavemente hacia uno con una pregunta.
 - Termina la mayoría de respuestas con una pregunta breve y funcional.
 
-FORMATO:
-Debes devolver SOLO un objeto JSON con las claves "reply" y "completed_objective_ids".
-No añadas ningún texto antes o después.
+FORMATO (OBLIGATORIO):
+Devuelve únicamente un objeto JSON válido con EXACTAMENTE estas claves:
+{
+  "reply": "respuesta breve en español",
+  "completed_objective_ids": ["obj_id_1"]
+}
+
+REGLA PARA completed_objective_ids:
+- Incluye SOLO los IDs de objetivos que el alumno ACABA de cumplir con SU ÚLTIMO MENSAJE.
+- Si ninguno, devuelve [].
+
+IMPORTANTE: No escribas texto fuera del JSON. No uses \`\`\`. No pongas frases tipo "Here is the JSON requested".
 `.trim();
 
     const contents = [
@@ -79,7 +90,6 @@ No añadas ningún texto antes o después.
     ];
 
     const geminiResp = await fetch(
-      // Modelo actual (ajústalo si estás usando otro que te funcione)
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
@@ -89,17 +99,18 @@ No añadas ningún texto antes o después.
           contents,
           generationConfig: {
             responseMimeType: "application/json",
-            // CLAVE: fuerza el esquema para que no meta "Here is the JSON requested"
+            // CLAVE: JSON Schema (minúsculas) para forzar salida válida
             responseSchema: {
-              type: "OBJECT",
+              type: "object",
               properties: {
-                reply: { type: "STRING" },
+                reply: { type: "string" },
                 completed_objective_ids: {
-                  type: "ARRAY",
-                  items: { type: "STRING" }
+                  type: "array",
+                  items: { type: "string" }
                 }
               },
-              required: ["reply", "completed_objective_ids"]
+              required: ["reply", "completed_objective_ids"],
+              additionalProperties: false
             },
             temperature: 0.4,
             maxOutputTokens: 220
@@ -128,7 +139,7 @@ No añadas ningún texto antes o después.
       .replace(/```$/i, "")
       .trim();
 
-    // Extrae el objeto JSON si viene con algo alrededor (backup)
+    // Extrae el objeto JSON si viniera con texto alrededor (backup)
     const firstBrace = cleaned.indexOf("{");
     const lastBrace = cleaned.lastIndexOf("}");
     const jsonCandidate =
