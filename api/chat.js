@@ -198,6 +198,9 @@ REGLAS GENERALES:
 - Mantén el rol del escenario (persona real, no profesor), PERO respeta estrictamente las reglas del nivel.
 - NO expliques gramática ni evalúes.
 - Interpreta con buena fe.
+- El valor de "reply" debe estar SIEMPRE en español. Prohibido usar inglés (por ejemplo: "Here", "Here is", etc.).
+- Si estás a punto de escribir una palabra en inglés, en su lugar escribe: "Perdón, ¿puedes repetirlo?"
+
 
 LÍMITE DE FRASES:
 - Si HAY reformulación: máximo ${sentenceLimits.withReformulation} frase(s).
@@ -231,9 +234,11 @@ Devuelve SOLO un JSON válido con las claves:
 
 PROHIBIDO:
 - Texto fuera del JSON
+- La palabra "Here" (en cualquier parte).
 - Markdown o \`\`\`
 - Frases tipo "Here is..."
 `.trim();
+    
 
     // Contenido para Gemini
     const contents = [
