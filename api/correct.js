@@ -15,69 +15,131 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing text" });
     }
 
-    const systemInstruction = `
+    const baseSystemInstruction = `
 Eres un corrector de español para estudiantes de nivel ${level}.
-Devuelve SOLO un JSON válido con:
+
+OBJETIVO:
+- Corrige la frase del alumno para que sea natural y adecuada al nivel ${level}.
+- Da una explicación MUY breve (máx. 1 frase) en español.
+
+FORMATO (OBLIGATORIO):
+Devuelve SOLO un objeto JSON válido, sin texto antes ni después.
+Debe EMPEZAR con "{" y TERMINAR con "}":
 {
-  "corrected": "frase corregida (natural y nivel ${level})",
-  "explanation": "explicación MUY breve (máximo 1 frase, en español)"
+  "corrected": "frase corregida",
+  "explanation": "explicación breve"
 }
-No añadas texto fuera del JSON.
+
+PROHIBIDO:
+- Escribir “Here is the JSON…”
+- Usar \`\`\` o bloques de código
 `.trim();
 
     const contents = [
       { role: "user", parts: [{ text: `Frase del alumno: ${text}` }] }
     ];
 
-    const r = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemInstruction }] },
-          contents,
-          generationConfig: {
-            responseMimeType: "application/json",
-            temperature: 0.2,
-            maxOutputTokens: 180,
-            responseSchema: {
-              type: "object",
-              properties: {
-                corrected: { type: "string" },
-                explanation: { type: "string" }
+    async function callGemini({ strict = false } = {}) {
+      const systemInstruction = strict
+        ? `${baseSystemInstruction}\n\nULTIMA REGLA: responde con JSON PURO. El primer carácter debe ser {`
+        : baseSystemInstruction;
+
+      const r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            contents,
+            generationConfig: {
+              responseMimeType: "application/json",
+              // Schema permitido (sin additionalProperties)
+              responseSchema: {
+                type: "object",
+                properties: {
+                  corrected: { type: "string" },
+                  explanation: { type: "string" }
+                },
+                required: ["corrected", "explanation"]
               },
-              required: ["corrected", "explanation"]
+              temperature: strict ? 0.1 : 0.2,
+              maxOutputTokens: 180
             }
-          }
-        })
-      }
-    );
+          })
+        }
+      );
 
-    const data = await r.json();
+      const data = await r.json();
+      if (!r.ok) return { ok: false, status: r.status, data };
 
-    if (!r.ok) {
-      return res.status(r.status).json({ error: "Gemini API error", details: data });
+      const parts = data?.candidates?.[0]?.content?.parts ?? [];
+      const textRaw = parts.map((p) => p?.text ?? "").join("").trim();
+
+      return { ok: true, textRaw };
     }
 
-    const parts = data?.candidates?.[0]?.content?.parts ?? [];
-    const textRaw = parts.map((p) => p?.text ?? "").join("").trim();
+    function extractJsonCandidate(textRaw) {
+      const cleaned = String(textRaw)
+        // quita fences
+        .replace(/```json/gi, "")
+        .replace(/```/g, "")
+        // quita prefacio típico
+        .replace(/^Here is the JSON requested:\s*/i, "")
+        .replace(/^Here is the JSON:\s*/i, "")
+        .trim();
 
-    // parse defensivo (por si mete prefacio)
-    const cleaned = String(textRaw).trim().replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
-    const firstBrace = cleaned.indexOf("{");
-    const lastBrace = cleaned.lastIndexOf("}");
-    const jsonCandidate =
-      firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace
-        ? cleaned.slice(firstBrace, lastBrace + 1)
-        : cleaned;
+      const firstBrace = cleaned.indexOf("{");
+      const lastBrace = cleaned.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        return cleaned.slice(firstBrace, lastBrace + 1);
+      }
+      return null;
+    }
 
-    const parsed = JSON.parse(jsonCandidate);
+    // 1) Primer intento
+    let out = await callGemini({ strict: false });
 
-    return res.status(200).json({
-      corrected: String(parsed.corrected || ""),
-      explanation: String(parsed.explanation || "")
-    });
+    if (!out.ok) {
+      return res.status(out.status).json({ error: "Gemini API error", details: out.data });
+    }
+
+    let jsonCandidate = extractJsonCandidate(out.textRaw);
+
+    // 2) Reintento 1 vez si no hay JSON detectable
+    if (!jsonCandidate) {
+      const out2 = await callGemini({ strict: true });
+
+      if (!out2.ok) {
+        return res.status(out2.status).json({ error: "Gemini API error", details: out2.data });
+      }
+
+      jsonCandidate = extractJsonCandidate(out2.textRaw);
+
+      if (!jsonCandidate) {
+        return res.status(500).json({
+          error: "Invalid JSON from model",
+          debug_raw: String(out2.textRaw).slice(0, 900)
+        });
+      }
+    }
+
+    // Parse final
+    try {
+      const parsed = JSON.parse(jsonCandidate);
+
+      const corrected =
+        typeof parsed?.corrected === "string" ? parsed.corrected.trim() : "";
+      const explanation =
+        typeof parsed?.explanation === "string" ? parsed.explanation.trim() : "";
+
+      return res.status(200).json({ corrected, explanation });
+    } catch (e) {
+      return res.status(500).json({
+        error: "Invalid JSON from model",
+        debug_raw: String(jsonCandidate).slice(0, 900)
+      });
+    }
   } catch (err) {
     return res.status(500).json({ error: "Server error", details: String(err?.message || err) });
   }
