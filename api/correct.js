@@ -22,9 +22,8 @@ OBJETIVO:
 - Corrige la frase del alumno para que sea natural y adecuada al nivel ${level}.
 - Da una explicación MUY breve (máx. 1 frase) en español.
 
-FORMATO (OBLIGATORIO):
-Devuelve SOLO un objeto JSON válido, sin texto antes ni después.
-Debe EMPEZAR con "{" y TERMINAR con "}":
+FORMATO:
+Devuelve SOLO un JSON con las claves:
 {
   "corrected": "frase corregida",
   "explanation": "explicación breve"
@@ -39,9 +38,29 @@ PROHIBIDO:
       { role: "user", parts: [{ text: `Frase del alumno: ${text}` }] }
     ];
 
+    function cleanModelText(textRaw) {
+      return String(textRaw || "")
+        .replace(/```json/gi, "")
+        .replace(/```/g, "")
+        .replace(/^Here is the JSON requested:\s*/i, "")
+        .replace(/^Here is the JSON:\s*/i, "")
+        .replace(/^Here is\s*/i, "")
+        .trim();
+    }
+
+    function tryExtractJson(textRaw) {
+      const cleaned = cleanModelText(textRaw);
+      const firstBrace = cleaned.indexOf("{");
+      const lastBrace = cleaned.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        return cleaned.slice(firstBrace, lastBrace + 1);
+      }
+      return null;
+    }
+
     async function callGemini({ strict = false } = {}) {
       const systemInstruction = strict
-        ? `${baseSystemInstruction}\n\nULTIMA REGLA: responde con JSON PURO. El primer carácter debe ser {`
+        ? `${baseSystemInstruction}\n\nULTIMA REGLA: el primer carácter de tu respuesta debe ser { y el último }`
         : baseSystemInstruction;
 
       const r = await fetch(
@@ -54,7 +73,6 @@ PROHIBIDO:
             contents,
             generationConfig: {
               responseMimeType: "application/json",
-              // Schema permitido (sin additionalProperties)
               responseSchema: {
                 type: "object",
                 properties: {
@@ -79,65 +97,56 @@ PROHIBIDO:
       return { ok: true, textRaw };
     }
 
-    function extractJsonCandidate(textRaw) {
-      const cleaned = String(textRaw)
-        // quita fences
-        .replace(/```json/gi, "")
-        .replace(/```/g, "")
-        // quita prefacio típico
-        .replace(/^Here is the JSON requested:\s*/i, "")
-        .replace(/^Here is the JSON:\s*/i, "")
-        .trim();
-
-      const firstBrace = cleaned.indexOf("{");
-      const lastBrace = cleaned.lastIndexOf("}");
-      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        return cleaned.slice(firstBrace, lastBrace + 1);
-      }
-      return null;
-    }
-
-    // 1) Primer intento
+    // 1) intento normal
     let out = await callGemini({ strict: false });
-
     if (!out.ok) {
       return res.status(out.status).json({ error: "Gemini API error", details: out.data });
     }
 
-    let jsonCandidate = extractJsonCandidate(out.textRaw);
+    let jsonCandidate = tryExtractJson(out.textRaw);
 
-    // 2) Reintento 1 vez si no hay JSON detectable
+    // 2) reintento estricto si no hay JSON
     if (!jsonCandidate) {
       const out2 = await callGemini({ strict: true });
-
       if (!out2.ok) {
         return res.status(out2.status).json({ error: "Gemini API error", details: out2.data });
       }
+      jsonCandidate = tryExtractJson(out2.textRaw);
 
-      jsonCandidate = extractJsonCandidate(out2.textRaw);
-
+      // Si AÚN no hay JSON: NO rompas la UI → devuelve 200 con fallback
       if (!jsonCandidate) {
-        return res.status(500).json({
-          error: "Invalid JSON from model",
-          debug_raw: String(out2.textRaw).slice(0, 900)
+        const fallback = cleanModelText(out2.textRaw);
+
+        return res.status(200).json({
+          // si no podemos corregir, al menos devolvemos el texto original
+          corrected: text,
+          explanation: fallback
+            ? `No pude devolver JSON. Respuesta del modelo: ${fallback}`
+            : "No pude corregir ahora mismo."
         });
       }
     }
 
-    // Parse final
+    // Parse final: si falla, NO rompas la UI
     try {
       const parsed = JSON.parse(jsonCandidate);
 
       const corrected =
-        typeof parsed?.corrected === "string" ? parsed.corrected.trim() : "";
+        typeof parsed?.corrected === "string" ? parsed.corrected.trim() : text;
+
       const explanation =
-        typeof parsed?.explanation === "string" ? parsed.explanation.trim() : "";
+        typeof parsed?.explanation === "string"
+          ? parsed.explanation.trim()
+          : "Corrección aplicada.";
 
       return res.status(200).json({ corrected, explanation });
-    } catch (e) {
-      return res.status(500).json({
-        error: "Invalid JSON from model",
-        debug_raw: String(jsonCandidate).slice(0, 900)
+    } catch {
+      const fallback = cleanModelText(out.textRaw);
+      return res.status(200).json({
+        corrected: text,
+        explanation: fallback
+          ? `No pude devolver JSON. Respuesta del modelo: ${fallback}`
+          : "No pude corregir ahora mismo."
       });
     }
   } catch (err) {
