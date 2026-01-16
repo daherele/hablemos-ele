@@ -100,19 +100,23 @@ function extractJsonString(textRaw) {
 }
 
 function isBadReply(reply) {
-  const r = String(reply || "").trim();
+  let r = String(reply || "");
+
+  // Quita caracteres invisibles (zero-width, BOM) y recorta
+  r = r.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
 
   // vacío o demasiado corto (permitimos sí/no/ok)
   if (r.length < 3 && !/^(sí|no|ok)$/i.test(r)) return true;
 
-  // "Here" / "Here is" típicos
-  if (/^here\b/i.test(r)) return true;
+  // "here" en cualquier parte
+  if (/here/i.test(r)) return true;
 
-  // señales de inglés muy típicas al inicio
-  if (/^(here|sure|okay|ok|yes|no)\b/i.test(r)) return true;
+  // señales típicas de inglés
+  if (/\b(sure|okay|yes)\b/i.test(r)) return true;
 
   return false;
 }
+
 
 function safeNormalizeParsed(parsed, fallbackText) {
   const reply =
@@ -167,12 +171,26 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing userMessage" });
     }
 
-    const shortHistory = (Array.isArray(history) ? history : [])
-      .slice(-6)
-      .map((m) => ({
-        sender: m?.sender,
-        text: String(m?.text ?? "").replace(/^\(Demo\)\s*/i, "")
-      }));
+const shortHistory = (Array.isArray(history) ? history : [])
+  .slice(-12)
+  .map((m) => ({
+    sender: m?.sender,
+    text: String(m?.text ?? "").replace(/^\(Demo\)\s*/i, "")
+  }))
+  .filter((m) => {
+    // siempre dejamos al usuario
+    if (m.sender === "user") return true;
+
+    // solo dejamos mensajes del bot/model si NO son “malos”
+    if (m.sender === "bot" || m.sender === "model" || m.sender === "assistant") {
+      return !isBadReply(m.text);
+    }
+
+    // cualquier otra cosa, fuera
+    return false;
+  })
+  .slice(-6);
+
 
     const objectivesList = (Array.isArray(currentObjectives) ? currentObjectives : [])
       .map((o) => {
@@ -244,13 +262,14 @@ PROHIBIDO:
 - Frases tipo "Here is..."
 `.trim();
 
-    const contents = [
-      ...shortHistory.map((msg) => ({
-        role: msg?.sender === "user" ? "user" : "model",
-        parts: [{ text: msg.text }]
-      })),
-      { role: "user", parts: [{ text: userMessage }] }
-    ];
+const contents = [
+  ...shortHistory.map((msg) => ({
+    role: msg.sender === "user" ? "user" : "model",
+    parts: [{ text: msg.text }]
+  })),
+  { role: "user", parts: [{ text: userMessage }] }
+];
+
 
     async function callGemini({ strict = false } = {}) {
       const systemPrompt = strict
