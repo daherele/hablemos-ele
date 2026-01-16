@@ -101,22 +101,22 @@ function extractJsonString(textRaw) {
 
 function isBadReply(reply) {
   let r = String(reply || "");
+  r = r.replace(/[\u200B-\u200D\uFEFF]/g, "").trim(); // invisibles
 
-  // Quita caracteres invisibles (zero-width, BOM) y recorta
-  r = r.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+  // vacío
+  if (!r) return true;
 
-  // vacío o demasiado corto (permitimos sí/no/ok)
+  // demasiado corto (permitimos sí/no/ok)
   if (r.length < 3 && !/^(sí|no|ok)$/i.test(r)) return true;
 
-  // "here" en cualquier parte
-  if (/here/i.test(r)) return true;
+  // "Here" como palabra
+  if (/\bhere\b/i.test(r)) return true;
 
   // señales típicas de inglés
   if (/\b(sure|okay|yes)\b/i.test(r)) return true;
 
   return false;
 }
-
 
 function safeNormalizeParsed(parsed, fallbackText) {
   const reply =
@@ -129,6 +129,16 @@ function safeNormalizeParsed(parsed, fallbackText) {
     : [];
 
   return { reply, completed_objective_ids: ids, _badReply: isBadReply(reply) };
+}
+
+// Detecta si el bot está pidiendo aclaración (para NO reinyectarlo al history)
+function isClarificationReply(text) {
+  const r = String(text || "").toLowerCase();
+  return (
+    r.includes("puedes repetir") ||
+    r.includes("no te entiendo") ||
+    r.includes("de otra forma")
+  );
 }
 
 // =======================
@@ -146,6 +156,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "Missing GEMINI_API_KEY in server env" });
     }
 
+    // 1) Body robusto (en Vercel a veces llega como string)
     let body = req.body;
     if (typeof body === "string") {
       try {
@@ -171,26 +182,42 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing userMessage" });
     }
 
-const shortHistory = (Array.isArray(history) ? history : [])
-  .slice(-12)
-  .map((m) => ({
-    sender: m?.sender,
-    text: String(m?.text ?? "").replace(/^\(Demo\)\s*/i, "")
-  }))
-  .filter((m) => {
-    // siempre dejamos al usuario
-    if (m.sender === "user") return true;
+    // Respuesta final única (cortafuegos)
+    function finalize(reply, ids = []) {
+      let r = String(reply || "");
+      r = r.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
 
-    // solo dejamos mensajes del bot/model si NO son “malos”
-    if (m.sender === "bot" || m.sender === "model" || m.sender === "assistant") {
-      return !isBadReply(m.text);
+      if (isBadReply(r)) {
+        r = "Perdón, ¿puedes repetirlo?";
+        ids = [];
+      }
+
+      // Marca para verificar deploy (puedes quitarla luego)
+      res.setHeader("x-chat-version", "recovery-v1");
+
+      return res.status(200).json({ reply: r, completed_objective_ids: ids });
     }
 
-    // cualquier otra cosa, fuera
-    return false;
-  })
-  .slice(-6);
+    // 2) Historial corto y limpio (quita "(Demo)") + evita bucles de aclaración
+    const shortHistory = (Array.isArray(history) ? history : [])
+      .slice(-12)
+      .map((m) => ({
+        sender: m?.sender,
+        text: String(m?.text ?? "").replace(/^\(Demo\)\s*/i, "")
+      }))
+      .filter((m) => {
+        if (m.sender === "user") return true;
 
+        if (m.sender === "bot" || m.sender === "model" || m.sender === "assistant") {
+          // No reinyectamos aclaraciones del bot al contexto (evita bucles)
+          if (isClarificationReply(m.text)) return false;
+          // Tampoco reinyectamos respuestas “rotas”
+          if (isBadReply(m.text)) return false;
+          return true;
+        }
+        return false;
+      })
+      .slice(-6);
 
     const objectivesList = (Array.isArray(currentObjectives) ? currentObjectives : [])
       .map((o) => {
@@ -204,6 +231,7 @@ const shortHistory = (Array.isArray(history) ? history : [])
     const sentenceLimits = getSentenceLimits(level);
     const correctionMode = getCorrectionMode(level);
 
+    // Prompt normal (completo)
     const baseSystemPrompt = `
 Actúa como un interlocutor nativo en un escenario de práctica de español.
 
@@ -222,8 +250,6 @@ REGLAS GENERALES:
 - Mantén el rol del escenario (persona real, no profesor), PERO respeta estrictamente las reglas del nivel.
 - NO expliques gramática ni evalúes.
 - Interpreta con buena fe.
-- El valor de "reply" debe estar SIEMPRE en español. Prohibido usar inglés (por ejemplo: "Here", "Here is", etc.).
-- Si estás a punto de escribir una palabra en inglés, en su lugar escribe: "Perdón, ¿puedes repetirlo?"
 
 LÍMITE DE FRASES:
 - Si HAY reformulación: máximo ${sentenceLimits.withReformulation} frase(s).
@@ -232,7 +258,7 @@ LÍMITE DE FRASES:
 REGLA DURA: No superes esos límites bajo ninguna circunstancia.
 
 CONTINUACIÓN (según nivel):
-- A1/A2: termina con UNA pregunta muy simple (A1/A2).
+- A1/A2: termina con UNA pregunta muy simple.
 - B1/B2: termina con una pregunta breve, puede ser abierta.
 - C1/C2: termina con una pregunta natural o un comentario que invite a continuar (no siempre pregunta).
 
@@ -247,6 +273,7 @@ CORRECCIÓN (según nivel):
   - Solo corrige si el error dificulta o es muy relevante. Si no, sigue natural.
 
 ININTELIGIBLE:
+- Considera ininteligible SOLO si NO está en español o NO tiene sentido.
 - Si el mensaje es realmente ininteligible, di:
   "Perdón, no te entiendo. ¿Puedes decirlo de otra forma?"
 
@@ -257,29 +284,40 @@ Devuelve SOLO un JSON válido con las claves:
 
 PROHIBIDO:
 - Texto fuera del JSON
-- La palabra "Here" (en cualquier parte).
 - Markdown o \`\`\`
-- Frases tipo "Here is..."
 `.trim();
 
-const contents = [
-  ...shortHistory.map((msg) => ({
-    role: msg.sender === "user" ? "user" : "model",
-    parts: [{ text: msg.text }]
-  })),
-  { role: "user", parts: [{ text: userMessage }] }
-];
+    // Prompt de recuperación (corto y “desatascador”)
+    // A1/A2: 2 frases máximo SIEMPRE en recovery.
+    const recoveryPrompt = `
+Eres un interlocutor nativo en un roleplay de español.
 
+Escenario: "${scenario.title}"
+Rol: "${scenario.botPersona.name}"
+Nivel: ${level}
 
-    async function callGemini({ strict = false } = {}) {
+Reglas (RECOVERY):
+- Responde SOLO en español.
+- Máximo 2 frases cortas.
+- Sé natural y continúa la conversación.
+- Devuelve SOLO JSON con:
+  {"reply":"...","completed_objective_ids":[]}
+`.trim();
+
+    const contents = [
+      ...shortHistory.map((msg) => ({
+        role: msg.sender === "user" ? "user" : "model",
+        parts: [{ text: msg.text }]
+      })),
+      { role: "user", parts: [{ text: userMessage }] }
+    ];
+
+    async function callGemini({ strict = false, overrideContents = null, overridePrompt = null } = {}) {
+      const promptToUse = overridePrompt || baseSystemPrompt;
+
       const systemPrompt = strict
-        ? `${baseSystemPrompt}
-
-REGLA FINAL (OBLIGATORIA):
-- Si reply contiene cualquier palabra en inglés (por ejemplo "Here"), debes devolver:
-  {"reply":"Perdón, ¿puedes repetirlo?","completed_objective_ids":[]}
-`
-        : baseSystemPrompt;
+        ? `${promptToUse}\n\nULTIMA REGLA: devuelve SOLO JSON válido (objeto) y nada más.`
+        : promptToUse;
 
       const url =
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
@@ -291,7 +329,7 @@ REGLA FINAL (OBLIGATORIA):
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: systemPrompt }] },
-            contents,
+            contents: overrideContents || contents,
             generationConfig: {
               responseMimeType: "application/json",
               responseSchema: {
@@ -331,79 +369,64 @@ REGLA FINAL (OBLIGATORIA):
       return { ok: true, textRaw, data };
     }
 
-    // -------- Lógica principal --------
+    async function parseGeminiOutput(out) {
+      if (!out?.ok) return null;
 
-    const out = await callGemini({ strict: false });
-    if (!out.ok) {
-      return res.status(out.status).json({ error: "Gemini API error", details: out.data });
-    }
-
-    let jsonStr = extractJsonString(out.textRaw);
-
-    // Reintento estricto si no hay JSON válido
-    if (!jsonStr) {
-      const out2 = await callGemini({ strict: true });
-      if (!out2.ok) {
-        return res.status(out2.status).json({ error: "Gemini API error", details: out2.data });
-      }
-      jsonStr = extractJsonString(out2.textRaw);
-
-      if (!jsonStr) {
-        const fallbackReply = cleanModelText(out2.textRaw);
-        return res.status(200).json({
-          reply: fallbackReply || "Perdón, ¿puedes repetirlo?",
-          completed_objective_ids: []
-        });
-      }
+      const jsonStr = extractJsonString(out.textRaw);
+      if (!jsonStr) return null;
 
       try {
-        const parsed2 = JSON.parse(jsonStr);
-        const norm2 = safeNormalizeParsed(parsed2, out2.textRaw);
-
-        if (norm2._badReply) {
-          return res.status(200).json({ reply: "Perdón, ¿puedes repetirlo?", completed_objective_ids: [] });
-        }
-
-        return res.status(200).json({ reply: norm2.reply, completed_objective_ids: norm2.completed_objective_ids });
+        const parsed = JSON.parse(jsonStr);
+        return safeNormalizeParsed(parsed, out.textRaw);
       } catch {
-        const fallbackReply = cleanModelText(out2.textRaw);
-        return res.status(200).json({
-          reply: fallbackReply || "Perdón, ¿puedes repetirlo?",
-          completed_objective_ids: []
-        });
+        return null;
       }
     }
 
-    // Parse del primer intento (con reintento si "reply" es malo)
-    try {
-      const parsed = JSON.parse(jsonStr);
-      const norm = safeNormalizeParsed(parsed, out.textRaw);
+    // =======================
+    // Lógica principal con recovery
+    // =======================
 
-      if (norm._badReply) {
-        const out2 = await callGemini({ strict: true });
-        if (out2.ok) {
-          const jsonStr2 = extractJsonString(out2.textRaw);
-          if (jsonStr2) {
-            try {
-              const parsed2 = JSON.parse(jsonStr2);
-              const norm2 = safeNormalizeParsed(parsed2, out2.textRaw);
-              if (!norm2._badReply) {
-                return res.status(200).json({ reply: norm2.reply, completed_objective_ids: norm2.completed_objective_ids });
-              }
-            } catch {}
-          }
-        }
-        return res.status(200).json({ reply: "Perdón, ¿puedes repetirlo?", completed_objective_ids: [] });
-      }
-
-      return res.status(200).json({ reply: norm.reply, completed_objective_ids: norm.completed_objective_ids });
-    } catch {
-      const fallbackReply = cleanModelText(out.textRaw);
-      return res.status(200).json({
-        reply: fallbackReply || "Perdón, ¿puedes repetirlo?",
-        completed_objective_ids: []
-      });
+    // 1) Intento normal
+    const out1 = await callGemini({ strict: false });
+    if (!out1.ok) {
+      // error real de API
+      return res.status(out1.status).json({ error: "Gemini API error", details: out1.data });
     }
+
+    const norm1 = await parseGeminiOutput(out1);
+
+    // Si salió bien, devolvemos
+    if (norm1 && !norm1._badReply) {
+      return finalize(norm1.reply, norm1.completed_objective_ids);
+    }
+
+    // 2) Intento strict (mismo contexto)
+    const out2 = await callGemini({ strict: true });
+    if (out2.ok) {
+      const norm2 = await parseGeminiOutput(out2);
+      if (norm2 && !norm2._badReply) {
+        return finalize(norm2.reply, norm2.completed_objective_ids);
+      }
+    }
+
+    // 3) Recovery: strict + prompt corto + SIN historial (reset)
+    const contentsReset = [{ role: "user", parts: [{ text: userMessage }] }];
+    const out3 = await callGemini({
+      strict: true,
+      overrideContents: contentsReset,
+      overridePrompt: recoveryPrompt
+    });
+
+    if (out3.ok) {
+      const norm3 = await parseGeminiOutput(out3);
+      if (norm3 && !norm3._badReply) {
+        return finalize(norm3.reply, norm3.completed_objective_ids);
+      }
+    }
+
+    // 4) Fallback final seguro
+    return finalize("Perdón, ¿puedes repetirlo?", []);
   } catch (err) {
     return res.status(500).json({ error: "Server error", details: String(err?.message || err) });
   }
