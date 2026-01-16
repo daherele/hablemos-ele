@@ -25,7 +25,13 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing userMessage" });
     }
 
-    const shortHistory = Array.isArray(history) ? history.slice(-6) : [];
+    // Historial corto y limpio (quita prefijo "(Demo)")
+    const shortHistory = (Array.isArray(history) ? history : [])
+      .slice(-6)
+      .map((m) => ({
+        sender: m?.sender,
+        text: String(m?.text ?? "").replace(/^\(Demo\)\s*/i, "")
+      }));
 
     const objectivesList = (Array.isArray(currentObjectives) ? currentObjectives : [])
       .map((o) => {
@@ -59,37 +65,21 @@ INSTRUCCIONES (MUY IMPORTANTES):
 - Si no cumple un objetivo, responde de forma natural y guía suavemente hacia uno con una pregunta.
 - Termina la mayoría de respuestas con una pregunta breve y funcional.
 
-EJEMPLOS OBLIGATORIOS:
-Alumno: "¡Qué casa tan bonita!"
-Tú: "¡Gracias! ¿Quieres beber algo?"
-
-Alumno: "Hola, ¿qué tal?"
-Tú: "¡Hola! Muy bien. ¿Cómo estás?"
-
-FORMATO DE RESPUESTA (JSON OBLIGATORIO):
-Devuelve SOLO:
-{
-  "reply": "respuesta breve en español",
-  "completed_objective_ids": ["obj_id_1"]
-}
-
-REGLA PARA completed_objective_ids:
-- Incluye SOLO los IDs de objetivos que el alumno ACABA de cumplir con SU ÚLTIMO MENSAJE.
-- Si ninguno, devuelve [].
-
-IMPORTANTE: No incluyas texto fuera del JSON. No uses \`\`\` ni comentarios. Solo un objeto JSON válido.
+FORMATO:
+Debes devolver SOLO un objeto JSON con las claves "reply" y "completed_objective_ids".
+No añadas ningún texto antes o después.
 `.trim();
 
     const contents = [
       ...shortHistory.map((msg) => ({
         role: msg?.sender === "user" ? "user" : "model",
-        parts: [{ text: String(msg?.text ?? "") }]
+        parts: [{ text: msg.text }]
       })),
       { role: "user", parts: [{ text: userMessage }] }
     ];
 
     const geminiResp = await fetch(
-      // Modelo más estable para empezar
+      // Modelo actual (ajústalo si estás usando otro que te funcione)
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
@@ -99,6 +89,18 @@ IMPORTANTE: No incluyas texto fuera del JSON. No uses \`\`\` ni comentarios. Sol
           contents,
           generationConfig: {
             responseMimeType: "application/json",
+            // CLAVE: fuerza el esquema para que no meta "Here is the JSON requested"
+            responseSchema: {
+              type: "OBJECT",
+              properties: {
+                reply: { type: "STRING" },
+                completed_objective_ids: {
+                  type: "ARRAY",
+                  items: { type: "STRING" }
+                }
+              },
+              required: ["reply", "completed_objective_ids"]
+            },
             temperature: 0.4,
             maxOutputTokens: 220
           }
@@ -115,39 +117,19 @@ IMPORTANTE: No incluyas texto fuera del JSON. No uses \`\`\` ni comentarios. Sol
       });
     }
 
-    // Une todos los parts
+    // Une todos los parts por si vienen varios
     const parts = data?.candidates?.[0]?.content?.parts ?? [];
     const textRaw = parts.map((p) => p?.text ?? "").join("").trim();
 
+    // Limpia fences por si acaso
     const cleaned = String(textRaw)
       .trim()
       .replace(/^```json\s*/i, "")
       .replace(/```$/i, "")
       .trim();
 
+    // Extrae el objeto JSON si viene con algo alrededor (backup)
     const firstBrace = cleaned.indexOf("{");
     const lastBrace = cleaned.lastIndexOf("}");
     const jsonCandidate =
-      firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace
-        ? cleaned.slice(firstBrace, lastBrace + 1)
-        : cleaned;
-
-    try {
-      const parsed = JSON.parse(jsonCandidate);
-
-      const reply = typeof parsed?.reply === "string" ? parsed.reply : "No pude generar respuesta.";
-      const ids = Array.isArray(parsed?.completed_objective_ids)
-        ? parsed.completed_objective_ids
-        : [];
-
-      return res.status(200).json({ reply, completed_objective_ids: ids });
-    } catch (e) {
-      return res.status(500).json({
-        error: "Invalid JSON from model",
-        debug_raw: cleaned.slice(0, 700)
-      });
-    }
-  } catch (err) {
-    return res.status(500).json({ error: "Server error", details: String(err?.message || err) });
-  }
-}
+      firstBrace !== -1 &&
