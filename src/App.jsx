@@ -423,10 +423,9 @@ export default function App() {
       if (!correctedClean) return;
 
       const originalClean = String(text || "").trim();
-      const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
+const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
+if (same) return;
 
-      // Si es igual o solo estético, no mostramos corrección inline.
-      if (same || isOnlyStylisticChange(originalClean, correctedClean)) return;
 
       const safeExplanation = sanitizeExplanation(explanation, correctedClean);
 
@@ -499,10 +498,8 @@ export default function App() {
       // sin corrección útil
       if (!correctedClean) return "✅ La frase está bien.";
 
-      const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
-      if (same || isOnlyStylisticChange(originalClean, correctedClean)) {
-        return "✅ La frase está bien.";
-      }
+onst same = correctedClean.toLowerCase() === originalClean.toLowerCase();
+if (same) return "✅ La frase está bien.";
 
       const safeExplanation = sanitizeExplanation(explanation, correctedClean);
 
