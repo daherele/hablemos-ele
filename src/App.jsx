@@ -93,16 +93,10 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
 const callGeminiCorrection = async (text, level) => {
   const data = await postJSON("/api/correct", { text, level });
 
-  // Tu backend devuelve: { corrected, explanation }
-  const corrected = typeof data?.corrected === "string" ? data.corrected : "";
-  const explanation = typeof data?.explanation === "string" ? data.explanation : "";
-
-  // Lo que muestras en la UI (feedback) puede ser texto formateado
-  if (corrected && explanation) return `✅ ${corrected}\n💡 ${explanation}`;
-  if (corrected) return `✅ ${corrected}`;
-  if (explanation) return `💡 ${explanation}`;
-
-  return "No pude corregir ahora mismo.";
+  return {
+    corrected: typeof data?.corrected === "string" ? data.corrected.trim() : "",
+    explanation: typeof data?.explanation === "string" ? data.explanation.trim() : ""
+  };
 };
 
 const callGeminiScenarioGen = async () => {
