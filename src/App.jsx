@@ -89,9 +89,35 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
   }
 };
 
-// 🚫 Desactivadas por ahora (por seguridad) hasta que tengas endpoints backend
-const callGeminiCorrection = async () => {
-  return "🔒 Corrección desactivada por seguridad (mueve esta función a /api/correct).";
+const normalizeText = (value) => String(value || "").trim().toLowerCase();
+
+const toSingleSentence = (value) => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const match = trimmed.match(/^[^.!?]+[.!?]?/);
+  return (match ? match[0] : trimmed).trim();
+};
+
+const sanitizeExplanation = (explanation, corrected, original) => {
+  const cleaned = String(explanation || "").trim();
+  const hasTechnical = [/no pude devolver json/i, /here is the json/i, /json requested/i].some((pattern) =>
+    pattern.test(cleaned)
+  );
+  const changed = normalizeText(corrected) !== normalizeText(original);
+
+  if (hasTechnical) {
+    return changed ? `Prueba esta versión: ${corrected}` : "La frase es correcta en este contexto.";
+  }
+
+  return toSingleSentence(cleaned);
+};
+
+const callGeminiCorrection = async (text, level) => {
+  const data = await postJSON("/api/correct", { text, level });
+  return {
+    corrected: typeof data?.corrected === "string" ? data.corrected : text,
+    explanation: typeof data?.explanation === "string" ? data.explanation : ""
+  };
 };
 const callGeminiScenarioGen = async () => {
   throw new Error("🔒 Generación de escenarios desactivada por seguridad (mueve a /api/scenario).");
@@ -182,6 +208,7 @@ const ChatMessage = ({ message, isUser, onCorrect, isLast }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [isCorrecting, setIsCorrecting] = useState(false);
+  const [hasCorrected, setHasCorrected] = useState(false);
 
   const handlePlay = async () => {
     if (isPlaying) return;
@@ -193,7 +220,10 @@ const ChatMessage = ({ message, isUser, onCorrect, isLast }) => {
   const handleCorrection = async () => {
     setIsCorrecting(true);
     const result = await onCorrect(message.text);
-    setFeedback(result);
+    setFeedback(result?.feedback ?? null);
+    if (result?.status && result.status !== "error") {
+      setHasCorrected(true);
+    }
     setIsCorrecting(false);
   };
 
@@ -226,12 +256,11 @@ const ChatMessage = ({ message, isUser, onCorrect, isLast }) => {
             </button>
           )}
 
-          {isUser && isLast && !feedback && (
+          {isUser && isLast && !hasCorrected && (
             <button
               onClick={handleCorrection}
               disabled={isCorrecting}
               className="text-xs text-indigo-500 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-full flex items-center gap-1 transition-colors border border-indigo-100"
-              title="Corrección desactivada por seguridad (mover a backend)"
             >
               {isCorrecting ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
               <span>Corregir</span>
@@ -343,6 +372,7 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
   const [currentObjectives, setCurrentObjectives] = useState([]);
+  const [toast, setToast] = useState(null);
 
   // Create Scenario State (desactivado por seguridad hasta backend)
   const [isCreatingScenario, setIsCreatingScenario] = useState(false);
@@ -354,6 +384,16 @@ export default function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 2500);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const showToast = (message, type = "success") => {
+    setToast({ message, type });
+  };
 
   const filteredScenarios = scenarios.filter(s => {
     if (selectedLevelId === 'A1' || selectedLevelId === 'A2') return s.difficulty.some(d => ['A1', 'A2'].includes(d));
@@ -450,7 +490,27 @@ export default function App() {
   };
 
   const handleCorrectionRequest = async (text) => {
-    return await callGeminiCorrection(text, selectedLevelId);
+    try {
+      const data = await callGeminiCorrection(text, selectedLevelId);
+      const corrected = data?.corrected ?? text;
+      const explanation = data?.explanation ?? "";
+
+      if (normalizeText(corrected) === normalizeText(text)) {
+        showToast("✅ La frase es correcta", "success");
+        return { feedback: null, status: "no-change" };
+      }
+
+      const safeExplanation = sanitizeExplanation(explanation, corrected, text);
+      const feedback = safeExplanation.startsWith("Prueba esta versión:")
+        ? safeExplanation
+        : `Corrección: ${corrected}${safeExplanation ? `. ${safeExplanation}` : ""}`;
+
+      return { feedback, status: "ok" };
+    } catch (err) {
+      console.warn("Backend /api/correct falló:", err);
+      showToast("No puedo corregir ahora mismo", "error");
+      return { feedback: null, status: "error" };
+    }
   };
 
   const handleVocabSelect = (word) => {
@@ -634,6 +694,17 @@ export default function App() {
         </div>
 
         <div className="bg-white p-3 md:p-4 border-t shrink-0">
+          {toast && (
+            <div
+              className={`max-w-3xl mx-auto mb-2 text-xs md:text-sm rounded-lg px-3 py-2 border flex items-center gap-2 ${
+                toast.type === "error"
+                  ? "bg-red-50 border-red-200 text-red-700"
+                  : "bg-green-50 border-green-200 text-green-700"
+              }`}
+            >
+              <span>{toast.message}</span>
+            </div>
+          )}
           <form onSubmit={handleSendMessage} className="max-w-3xl mx-auto relative flex items-center gap-2">
             <input
               type="text"
@@ -711,4 +782,3 @@ export default function App() {
     </div>
   );
 }
-

@@ -95,6 +95,31 @@ No uses \`\`\` ni frases tipo "Here is...".
       return null;
     }
 
+    function extractModelText(data) {
+      const parts = data?.candidates?.[0]?.content?.parts ?? [];
+      const textFromParts = parts
+        .map((p) => (typeof p?.text === "string" ? p.text : p?.text ? String(p.text) : ""))
+        .join("")
+        .trim();
+
+      if (textFromParts) return textFromParts;
+
+      const inlineChunks = parts
+        .map((p) => (typeof p?.inlineData?.data === "string" ? p.inlineData.data : ""))
+        .filter(Boolean);
+
+      if (inlineChunks.length) {
+        const merged = inlineChunks.join("");
+        try {
+          return Buffer.from(merged, "base64").toString("utf8").trim();
+        } catch {
+          return merged.trim();
+        }
+      }
+
+      return String(data?.candidates?.[0]?.content?.text ?? "").trim();
+    }
+
     async function callGemini({ strict = false } = {}) {
       const systemPrompt = strict
         ? `${baseSystemPrompt}\n\nULTIMA REGLA: el primer carácter de tu respuesta debe ser { y el último }`
@@ -131,8 +156,7 @@ No uses \`\`\` ni frases tipo "Here is...".
       const data = await r.json();
       if (!r.ok) return { ok: false, status: r.status, data };
 
-      const parts = data?.candidates?.[0]?.content?.parts ?? [];
-      const textRaw = parts.map((p) => p?.text ?? "").join("").trim();
+      const textRaw = extractModelText(data);
 
       return { ok: true, textRaw };
     }
