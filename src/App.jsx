@@ -414,30 +414,32 @@ export default function App() {
     return a === b;
   }
 
-  // ✅ autocorrección silenciosa: guarda correction en el mensaje
-  async function autoCorrectMessage(messageId, text, level) {
-    try {
-      const { corrected, explanation } = await callGeminiCorrection(text, level);
+// ✅ autocorrección silenciosa: guarda correction en el mensaje
+async function autoCorrectMessage(messageId, text, level) {
+  try {
+    const { corrected, explanation } = await callGeminiCorrection(text, level);
 
-      const correctedClean = String(corrected || "").trim();
-      if (!correctedClean) return;
+    const correctedClean = String(corrected || "").trim();
+    if (!correctedClean) return;
 
-      const originalClean = String(text || "").trim();
-const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
-if (same) return;
+    const originalClean = String(text || "").trim();
+    const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
+    if (same) return;
+
+    const safeExplanation = sanitizeExplanation(explanation, correctedClean);
+
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId
+          ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } }
+          : m
+      )
+    );
+  } catch {
+    // silencioso
+  }
 }
 
-      const safeExplanation = sanitizeExplanation(explanation, correctedClean);
-
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } } : m
-        )
-      );
-    } catch {
-      // silencioso
-    }
-  }
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
