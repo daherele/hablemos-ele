@@ -3,19 +3,53 @@
 function extractJSON(text) {
   const raw = String(text || "").trim();
 
-  // Caso 1: viene en ```json ... ```
+  // 1) Quitar fences ```...```
   const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  if (fenceMatch?.[1]) return fenceMatch[1].trim();
+  const s = (fenceMatch?.[1] ? fenceMatch[1] : raw).trim();
 
-  // Caso 2: hay texto alrededor, cogemos el primer bloque {...}
-  const firstBrace = raw.indexOf("{");
-  const lastBrace = raw.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    return raw.slice(firstBrace, lastBrace + 1).trim();
+  // 2) Intentar parse directo (por si ya es JSON puro)
+  try {
+    JSON.parse(s);
+    return s;
+  } catch {
+    // seguimos
   }
 
-  // Caso 3: fallback
-  return raw;
+  // 3) Extraer el primer objeto JSON válido balanceando llaves
+  let start = -1;
+  let depth = 0;
+
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+
+    if (ch === "{") {
+      if (start === -1) start = i;
+      depth++;
+    } else if (ch === "}") {
+      if (start !== -1) depth--;
+      if (start !== -1 && depth === 0) {
+        const candidate = s.slice(start, i + 1).trim();
+        try {
+          JSON.parse(candidate);
+          return candidate;
+        } catch {
+          // Puede haber otro objeto más adelante
+          start = -1;
+          depth = 0;
+        }
+      }
+    }
+  }
+
+  // 4) Fallback: bloque entre primer { y último }
+  const firstBrace = s.indexOf("{");
+  const lastBrace = s.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    return s.slice(firstBrace, lastBrace + 1).trim();
+  }
+
+  // 5) Último recurso: devuelve lo que haya
+  return s;
 }
 
 export default async function handler(req, res) {
@@ -70,7 +104,7 @@ Condiciones:
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 700
+        maxOutputTokens: 800
       }
     };
 
@@ -93,27 +127,31 @@ Condiciones:
     const text =
       data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
 
-    // ✅ Limpieza (quita ```json ... ```)
+    // ✅ Limpieza + extracción robusta
     const cleaned = extractJSON(text);
 
-    // ✅ Parse robusto
+    // ✅ Parse robusto + debug
     let scenario;
     try {
       scenario = JSON.parse(cleaned);
     } catch (e) {
       return res.status(500).json({
         error: "Gemini no devolvió JSON válido",
-        details: cleaned.slice(0, 500)
+        details: cleaned.slice(0, 2000)
       });
     }
 
-    // Validación mínima para que no rompa el frontend
+    // Normalización mínima para que no rompa el frontend
     scenario.title = String(scenario.title || "").trim() || `Situación: ${context}`;
     scenario.description = String(scenario.description || "").trim() || "Escenario generado con IA.";
     scenario.level = scenario.level || level;
     scenario.context = scenario.context || context;
 
-    scenario.roles = scenario.roles && typeof scenario.roles === "object" ? scenario.roles : { user: "Alumno/a", ai: "Interlocutor" };
+    scenario.roles =
+      scenario.roles && typeof scenario.roles === "object"
+        ? scenario.roles
+        : { user: "Alumno/a", ai: "Interlocutor" };
+
     scenario.roles.user = scenario.roles.user || "Alumno/a";
     scenario.roles.ai = scenario.roles.ai || "Interlocutor";
 
