@@ -164,9 +164,15 @@ responseSchema: {
         completed_objective_ids: ids
       });
     } catch (e) {
-      return res.status(500).json({
-        error: "Invalid JSON from model",
-        debug_raw: cleaned.slice(0, 700)
+      const fallbackReply = cleaned
+        .replace(/^"|"$/g, "")
+        .trim();
+      console.warn("Invalid JSON from model, using fallback reply.", {
+        preview: cleaned.slice(0, 300)
+      });
+      return res.status(200).json({
+        reply: fallbackReply || "No pude generar respuesta.",
+        completed_objective_ids: []
       });
     }
   } catch (err) {
