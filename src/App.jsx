@@ -240,15 +240,14 @@ const ChatMessage = ({ message, isUser, isLastUserMessage, onCorrect }) => {
           )}
         </div>
 
-        {feedback && (
-          <div className="mt-2 bg-yellow-50 border border-yellow-200 rounded-lg p-2 text-xs text-yellow-800 max-w-full animate-fade-in flex gap-2 items-start">
-            <Sparkles size={14} className="mt-0.5 shrink-0 text-yellow-600" />
-            <div><SafeRender content={feedback} /></div>
-          </div>
-        )}
-      </div>
+{feedback && (
+  <div className="mt-2 bg-yellow-50 border border-yellow-200 rounded-lg p-2 text-xs text-yellow-800 max-w-full animate-fade-in flex gap-2 items-start">
+    <Sparkles size={14} className="mt-0.5 shrink-0 text-yellow-600" />
+    <div>
+      <SafeRender content={feedback} />
     </div>
-  );
+  </div>
+)}
 };
 
 export default function App() {
@@ -361,25 +360,36 @@ export default function App() {
     }
   };
 
-  const handleCorrectionRequest = async (text) => {
-    const { corrected, explanation } = await callCorrection(text, selectedLevelId);
+const handleCorrectionRequest = async (text) => {
+  const { corrected, explanation } = await callGeminiCorrection(text, selectedLevelId);
 
-    // Si no hay corrección, devolvemos feedback útil (no vacío)
-    if (!corrected) {
-      return explanation || "No pude corregir ahora mismo.";
-    }
+  const cleanedExplanation = String(explanation || "")
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .replace(/^here is.*$/i, "")
+    .trim();
 
-    // Reemplaza el último mensaje del usuario por la versión corregida
+  // Si no hay corrección válida, no muestres basura
+  if (!corrected) return "No pude corregir ahora mismo.";
+
+  // Reemplaza el último mensaje del usuario solo si cambia algo
+  if (corrected.trim() && corrected.trim() !== text.trim()) {
     setMessages((prev) => {
       const copy = [...prev];
       for (let i = copy.length - 1; i >= 0; i--) {
         if (copy[i]?.sender === "user") {
-          copy[i] = { ...copy[i], text: corrected };
+          copy[i] = { ...copy[i], text: corrected.trim() };
           break;
         }
       }
       return copy;
     });
+  }
+
+  // Feedback útil
+  if (cleanedExplanation) return `✅ ${corrected.trim()} · 💡 ${cleanedExplanation}`;
+  return `✅ ${corrected.trim()}`;
+};
 
     // Feedback breve (si no quieres feedback, devuelve null)
     return explanation ? `💡 ${explanation}` : "✅ Corregido.";
