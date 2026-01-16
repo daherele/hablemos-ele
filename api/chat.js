@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // Solo POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -10,13 +9,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "Missing GEMINI_API_KEY in server env" });
     }
 
-    const {
-      history = [],
-      scenario,
-      level,
-      userMessage,
-      currentObjectives = []
-    } = req.body || {};
+    const { history = [], scenario, level, userMessage, currentObjectives = [] } = req.body || {};
 
     if (!scenario?.title || !scenario?.botPersona?.name) {
       return res.status(400).json({ error: "Missing scenario data" });
@@ -25,17 +18,13 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing userMessage" });
     }
 
-    // Recortamos historial para coste/latencia
-    const safeHistory = Array.isArray(history) ? history.slice(-6) : [];
+    // Tu frontend usa status: pending | possible | confirmed
+    const pendingObjectives = (currentObjectives || []).filter(
+      (o) => o?.status !== "confirmed"
+    );
 
-    // Solo objetivos no confirmados
-    const pendingObjectives = Array.isArray(currentObjectives)
-      ? currentObjectives.filter(o => o && o.id && o.text && o.status !== "confirmed")
-      : [];
-
-    // Contexto objetivos (compacto)
     const objectivesContext = pendingObjectives
-      .map(o => `- ID: "${o.id}" DESC: "${String(o.text).slice(0, 140)}"`)
+      .map((o) => `- ID: "${o.id}" DESC: "${o.text}"`)
       .join("\n");
 
     const systemPrompt = `
@@ -45,41 +34,47 @@ NIVEL ALUMNO: ${level}.
 MISIÓN DEL ALUMNO (Objetivos pendientes):
 ${objectivesContext || "- (No hay objetivos pendientes)"}
 
-TAREA:
-1. Lee el último mensaje del alumno.
-2. Responde como tu personaje (natural, breve, nivel ${level}). Máximo 2 frases.
-3. Detecta si el alumno ha avanzado en sus objetivos. NO evalúes perfección: busca INTENCIÓN comunicativa lograda.
-4. Si dudas, confidence bajo.
-5. Devuelve sugerencias SOLO para objetivos pendientes (no confirmados).
+REGLAS DE CONVERSACIÓN:
+- Responde SIEMPRE en español.
+- Mantén el rol del escenario.
+- Frases cortas, naturales y adecuadas al nivel ${level}.
+- NO expliques gramática ni evalúes al alumno.
+- Si hay errores, reformula de manera natural dentro de tu respuesta.
+- NO digas “¿puedes repetirlo?” salvo que el mensaje sea realmente ininteligible.
+- Tu objetivo es ayudar al alumno a cumplir objetivos pendientes con andamiaje (preguntas útiles).
 
-FORMATO JSON ESTRICTO (NO MARKDOWN, SOLO JSON):
+TAREA:
+1) Lee el último mensaje del alumno.
+2) Responde como tu personaje (máx 2 frases).
+3) Detecta si el alumno ha avanzado en sus objetivos: busca INTENCIÓN comunicativa lograda (no perfección).
+4) Si no estás seguro, usa confidence bajo.
+5) Opcional: añade una pregunta de seguimiento breve que empuje hacia un objetivo pendiente.
+
+FORMATO JSON ESTRICTO (SIN MARKDOWN, SOLO JSON):
 {
-  "reply": "Tu respuesta en español (máx 2 frases)",
+  "reply": "respuesta en español",
   "objective_updates": [
     {
       "id": "id_del_objetivo",
       "status": "possible",
       "confidence": 0.0,
-      "evidence": "fragmento breve del texto del alumno",
-      "reason": "motivo muy breve en español"
+      "evidence": "fragmento del alumno",
+      "reason": "motivo breve"
     }
   ],
   "follow_up_question": "pregunta corta opcional o string vacío"
 }
-
-REGLAS IMPORTANTES:
-- "objective_updates" debe contener SOLO objetivos que el alumno PUEDE haber logrado con su ÚLTIMO mensaje.
-- Si no hay ninguno, devuelve [].
-- No inventes IDs: usa SOLO IDs listados arriba.
 `.trim();
 
+    // Recorta historial para evitar ruido y coste
+    const shortHistory = Array.isArray(history) ? history.slice(-8) : [];
+
     const contents = [
-      { role: "user", parts: [{ text: systemPrompt }] },
-      ...safeHistory.map(msg => ({
-        role: msg?.sender === "user" ? "user" : "model",
-        parts: [{ text: String(msg?.text ?? "").slice(0, 800) }]
+      ...shortHistory.map((msg) => ({
+        role: msg.sender === "user" ? "user" : "model",
+        parts: [{ text: String(msg.text ?? "") }]
       })),
-      { role: "user", parts: [{ text: userMessage.slice(0, 1200) }] }
+      { role: "user", parts: [{ text: userMessage }] }
     ];
 
     const geminiResp = await fetch(
@@ -88,11 +83,11 @@ REGLAS IMPORTANTES:
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] },
           contents,
           generationConfig: {
             responseMimeType: "application/json",
-            // opcional: un poco de control de longitud
-            maxOutputTokens: 300
+            temperature: 0.6
           }
         })
       }
@@ -107,70 +102,24 @@ REGLAS IMPORTANTES:
       });
     }
 
-const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-if (!rawText || typeof rawText !== "string") {
-  return res.status(200).json({
-    reply: "Perdona, ¿puedes repetirlo?",
-    completed_objective_ids: []
-  });
-}
+    try {
+      const parsed = JSON.parse(text);
 
-// Intentamos extraer JSON aunque venga “sucio”
-let parsed;
-try {
-  // Caso 1: JSON limpio
-  parsed = JSON.parse(rawText);
-} catch {
-  try {
-    // Caso 2: JSON embebido en texto
-    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      parsed = JSON.parse(jsonMatch[0]);
+      // Seguridad mínima: garantiza campos esperados
+      return res.status(200).json({
+        reply: parsed?.reply ?? "No pude generar respuesta.",
+        objective_updates: Array.isArray(parsed?.objective_updates) ? parsed.objective_updates : [],
+        follow_up_question: typeof parsed?.follow_up_question === "string" ? parsed.follow_up_question : ""
+      });
+    } catch {
+      return res.status(200).json({
+        reply: typeof text === "string" ? text : "No pude generar respuesta.",
+        objective_updates: [],
+        follow_up_question: ""
+      });
     }
-  } catch {
-    parsed = null;
-  }
-}
-
-if (parsed && parsed.reply) {
-  return res.status(200).json({
-    reply: parsed.reply,
-    completed_objective_ids: Array.isArray(parsed.completed_objective_ids)
-      ? parsed.completed_objective_ids
-      : []
-  });
-}
-
-// Fallback final: usar texto como respuesta conversacional
-return res.status(200).json({
-  reply: rawText,
-  completed_objective_ids: []
-});
-
-    // Normalizamos salida para que el frontend no se rompa
-    const reply = typeof parsed.reply === "string" ? parsed.reply : "No pude generar respuesta.";
-    const follow_up_question = typeof parsed.follow_up_question === "string" ? parsed.follow_up_question : "";
-
-    // Filtrado: objective_updates solo con ids válidos (pendientes) + shape correcto
-    const allowedIds = new Set(pendingObjectives.map(o => o.id));
-    const objective_updates = Array.isArray(parsed.objective_updates)
-      ? parsed.objective_updates
-          .filter(u => u && typeof u.id === "string" && allowedIds.has(u.id))
-          .map(u => ({
-            id: u.id,
-            status: "possible",
-            confidence: typeof u.confidence === "number" ? Math.max(0, Math.min(1, u.confidence)) : 0.5,
-            evidence: typeof u.evidence === "string" ? u.evidence.slice(0, 220) : "",
-            reason: typeof u.reason === "string" ? u.reason.slice(0, 140) : ""
-          }))
-      : [];
-
-    return res.status(200).json({
-      reply,
-      objective_updates,
-      follow_up_question
-    });
   } catch (err) {
     return res.status(500).json({ error: "Server error", details: String(err) });
   }
