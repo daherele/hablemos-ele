@@ -37,7 +37,7 @@ export default async function handler(req, res) {
       .map((o) => {
         const id = String(o?.id ?? "");
         const text = String(o?.text ?? "");
-        const done = Boolean(o?.completed);
+        const done = o?.status === "confirmed" || Boolean(o?.completed);
         return `- ID: "${id}": ${text} (Estado: ${done ? "Completado" : "Pendiente"})`;
       })
       .join("\n");
