@@ -1,10 +1,9 @@
 // /api/chat.js
 export default async function handler(req, res) {
-  // Solo POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
-  
+
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -26,7 +25,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing userMessage" });
     }
 
-    // Historial corto y limpio (quita prefijo "(Demo)")
+    // Historial corto y limpio (quita "(Demo)")
     const shortHistory = (Array.isArray(history) ? history : [])
       .slice(-6)
       .map((m) => ({
@@ -34,7 +33,6 @@ export default async function handler(req, res) {
         text: String(m?.text ?? "").replace(/^\(Demo\)\s*/i, "")
       }));
 
-    // Objetivos en texto (servidor)
     const objectivesList = (Array.isArray(currentObjectives) ? currentObjectives : [])
       .map((o) => {
         const id = String(o?.id ?? "");
@@ -44,7 +42,8 @@ export default async function handler(req, res) {
       })
       .join("\n");
 
-    const systemPrompt = `
+    // Importante: prompt SIN “ejemplos de JSON” largos, para no “invitar” al prefacio
+    const baseSystemPrompt = `
 Actúa como un interlocutor nativo en un escenario de práctica de español.
 
 CONTEXTO:
@@ -52,33 +51,20 @@ Escenario: "${scenario.title}"
 Rol: "${scenario.botPersona.name}"
 Nivel del estudiante: ${level}
 
-OBJETIVOS DE LA TAREA:
+OBJETIVOS:
 ${objectivesList}
 
-INSTRUCCIONES (MUY IMPORTANTES):
+REGLAS:
 - Responde SIEMPRE en español.
-- Mantén el rol del escenario y actúa como una persona real (no como profesor).
-- Usa frases cortas y naturales, adecuadas al nivel ${level}. Máximo 2 frases.
-- NO expliques gramática.
-- NO evalúes al estudiante.
-- Interpreta con buena fe: si el mensaje del alumno es comprensible aunque tenga errores, responde normalmente.
-- NO digas “¿puedes repetirlo?” ni “no entiendo” salvo que el mensaje sea realmente ininteligible.
-- Si el alumno hace un cumplido, responde agradeciendo.
-- Si no cumple un objetivo, responde de forma natural y guía suavemente hacia uno con una pregunta.
-- Termina la mayoría de respuestas con una pregunta breve y funcional.
+- Mantén el rol del escenario (persona real, no profesor).
+- Máximo 2 frases, naturales para nivel ${level}.
+- NO expliques gramática ni evalúes.
+- Interpreta con buena fe.
+- Termina normalmente con una pregunta breve.
 
-FORMATO (OBLIGATORIO):
-Devuelve únicamente un objeto JSON válido con EXACTAMENTE estas claves:
-{
-  "reply": "respuesta breve en español",
-  "completed_objective_ids": ["obj_id_1"]
-}
-
-REGLA PARA completed_objective_ids:
-- Incluye SOLO los IDs de objetivos que el alumno ACABA de cumplir con SU ÚLTIMO MENSAJE.
-- Si ninguno, devuelve [].
-
-IMPORTANTE: No escribas texto fuera del JSON. No uses \`\`\`. No pongas frases tipo "Here is the JSON requested".
+FORMATO:
+Devuelve SOLO un JSON con las claves: reply (string) y completed_objective_ids (array de strings).
+No uses \`\`\` ni frases tipo "Here is...".
 `.trim();
 
     const contents = [
@@ -89,84 +75,113 @@ IMPORTANTE: No escribas texto fuera del JSON. No uses \`\`\`. No pongas frases t
       { role: "user", parts: [{ text: userMessage }] }
     ];
 
-    const geminiResp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          contents,
-          generationConfig: {
-            responseMimeType: "application/json",
-            // CLAVE: JSON Schema (minúsculas) para forzar salida válida
-responseSchema: {
-  type: "object",
-  properties: {
-    reply: { type: "string" },
-    completed_objective_ids: {
-      type: "array",
-      items: { type: "string" }
+    function cleanModelText(textRaw) {
+      return String(textRaw || "")
+        .replace(/```json/gi, "")
+        .replace(/```/g, "")
+        .replace(/^Here is the JSON requested:\s*/i, "")
+        .replace(/^Here is the JSON:\s*/i, "")
+        .replace(/^Here is\s*/i, "")
+        .trim();
     }
-  },
-  required: ["reply", "completed_objective_ids"]
-},
 
-            temperature: 0.4,
-            maxOutputTokens: 220
-          }
-        })
+    function tryExtractJson(textRaw) {
+      const cleaned = cleanModelText(textRaw);
+      const firstBrace = cleaned.indexOf("{");
+      const lastBrace = cleaned.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        return cleaned.slice(firstBrace, lastBrace + 1);
       }
-    );
-
-    const data = await geminiResp.json();
-
-    if (!geminiResp.ok) {
-      return res.status(geminiResp.status).json({
-        error: "Gemini API error",
-        details: data
-      });
+      return null;
     }
 
-    // Une todos los parts por si vienen varios
-    const parts = data?.candidates?.[0]?.content?.parts ?? [];
-    const textRaw = parts.map((p) => p?.text ?? "").join("").trim();
+    async function callGemini({ strict = false } = {}) {
+      const systemPrompt = strict
+        ? `${baseSystemPrompt}\n\nULTIMA REGLA: el primer carácter de tu respuesta debe ser { y el último }`
+        : baseSystemPrompt;
 
-    // Limpia fences por si acaso
-    const cleaned = String(textRaw)
-      .trim()
-      .replace(/^```json\s*/i, "")
-      .replace(/```$/i, "")
-      .trim();
+      const r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents,
+            generationConfig: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: "object",
+                properties: {
+                  reply: { type: "string" },
+                  completed_objective_ids: {
+                    type: "array",
+                    items: { type: "string" }
+                  }
+                },
+                required: ["reply", "completed_objective_ids"]
+              },
+              temperature: strict ? 0.1 : 0.4,
+              maxOutputTokens: 260
+            }
+          })
+        }
+      );
 
-    // Extrae el objeto JSON si viniera con texto alrededor (backup)
-    const firstBrace = cleaned.indexOf("{");
-    const lastBrace = cleaned.lastIndexOf("}");
-    const jsonCandidate =
-      firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace
-        ? cleaned.slice(firstBrace, lastBrace + 1)
-        : cleaned;
+      const data = await r.json();
+      if (!r.ok) return { ok: false, status: r.status, data };
 
+      const parts = data?.candidates?.[0]?.content?.parts ?? [];
+      const textRaw = parts.map((p) => p?.text ?? "").join("").trim();
+
+      return { ok: true, textRaw };
+    }
+
+    // 1) intento normal
+    let out = await callGemini({ strict: false });
+    if (!out.ok) {
+      return res.status(out.status).json({ error: "Gemini API error", details: out.data });
+    }
+
+    let jsonCandidate = tryExtractJson(out.textRaw);
+
+    // 2) reintento estricto si no hay JSON
+    if (!jsonCandidate) {
+      const out2 = await callGemini({ strict: true });
+      if (!out2.ok) {
+        return res.status(out2.status).json({ error: "Gemini API error", details: out2.data });
+      }
+      jsonCandidate = tryExtractJson(out2.textRaw);
+
+      // Si AÚN no hay JSON: NO rompas el chat → responde con texto rescatado
+      if (!jsonCandidate) {
+        const fallbackReply = cleanModelText(out2.textRaw);
+        return res.status(200).json({
+          reply: fallbackReply || "Perdón, ¿qué quieres hacer ahora?",
+          completed_objective_ids: []
+        });
+      }
+    }
+
+    // Parse final: si falla, NO rompas el chat
     try {
       const parsed = JSON.parse(jsonCandidate);
 
       const reply =
         typeof parsed?.reply === "string" && parsed.reply.trim()
           ? parsed.reply.trim()
-          : "No pude generar respuesta.";
+          : cleanModelText(out.textRaw) || "Perdón, ¿qué quieres hacer ahora?";
 
       const ids = Array.isArray(parsed?.completed_objective_ids)
         ? parsed.completed_objective_ids.map(String)
         : [];
 
+      return res.status(200).json({ reply, completed_objective_ids: ids });
+    } catch {
+      const fallbackReply = cleanModelText(out.textRaw);
       return res.status(200).json({
-        reply,
-        completed_objective_ids: ids
-      });
-    } catch (e) {
-      return res.status(500).json({
-        error: "Invalid JSON from model",
-        debug_raw: cleaned.slice(0, 700)
+        reply: fallbackReply || "Perdón, ¿qué quieres hacer ahora?",
+        completed_objective_ids: []
       });
     }
   } catch (err) {
