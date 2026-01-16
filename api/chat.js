@@ -107,23 +107,46 @@ REGLAS IMPORTANTES:
       });
     }
 
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    // Parseo seguro + normalización del shape
-    let parsed = null;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = null;
-    }
+if (!rawText || typeof rawText !== "string") {
+  return res.status(200).json({
+    reply: "Perdona, ¿puedes repetirlo?",
+    completed_objective_ids: []
+  });
+}
 
-    if (!parsed || typeof parsed !== "object") {
-      return res.status(200).json({
-        reply: typeof text === "string" ? text : "No pude generar respuesta.",
-        objective_updates: [],
-        follow_up_question: ""
-      });
+// Intentamos extraer JSON aunque venga “sucio”
+let parsed;
+try {
+  // Caso 1: JSON limpio
+  parsed = JSON.parse(rawText);
+} catch {
+  try {
+    // Caso 2: JSON embebido en texto
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      parsed = JSON.parse(jsonMatch[0]);
     }
+  } catch {
+    parsed = null;
+  }
+}
+
+if (parsed && parsed.reply) {
+  return res.status(200).json({
+    reply: parsed.reply,
+    completed_objective_ids: Array.isArray(parsed.completed_objective_ids)
+      ? parsed.completed_objective_ids
+      : []
+  });
+}
+
+// Fallback final: usar texto como respuesta conversacional
+return res.status(200).json({
+  reply: rawText,
+  completed_objective_ids: []
+});
 
     // Normalizamos salida para que el frontend no se rompa
     const reply = typeof parsed.reply === "string" ? parsed.reply : "No pude generar respuesta.";
