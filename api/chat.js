@@ -108,8 +108,8 @@ function isBadReply(reply) {
   // vacío o demasiado corto (permitimos sí/no/ok)
   if (r.length < 3 && !/^(sí|no|ok)$/i.test(r)) return true;
 
-  // "here" en cualquier parte
-  if (/here/i.test(r)) return true;
+  // "here" como palabra completa (evita falsos positivos en español como "herencia")
+  if (/\bhere\b/i.test(r)) return true;
 
   // señales típicas de inglés
   if (/\b(sure|okay|yes)\b/i.test(r)) return true;
