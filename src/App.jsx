@@ -12,7 +12,7 @@ import {
  * - No hay llamadas directas a Google desde el navegador.
  * - El frontend llama a /api/chat (función backend en Vercel).
  *
- * Nota: Corrección / TTS / Generar escenarios quedan desactivados aquí por seguridad
+ * Nota: TTS / Generar escenarios quedan desactivados aquí por seguridad
  * hasta que crees sus endpoints backend. (Así no expones la key en cliente).
  */
 
@@ -89,9 +89,17 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
   }
 };
 
-// 🚫 Desactivadas por ahora (por seguridad) hasta que tengas endpoints backend
-const callGeminiCorrection = async () => {
-  return "🔒 Corrección desactivada por seguridad (mueve esta función a /api/correct).";
+// ✅ Corrección vía backend
+const callGeminiCorrection = async (text, level) => {
+  try {
+    const data = await postJSON("/api/correct", { text, level });
+    const corrected = typeof data?.corrected === "string" ? data.corrected : text;
+    const explanation = typeof data?.explanation === "string" ? data.explanation : "";
+    return `✅ ${corrected}${explanation ? ` — ${explanation}` : ""}`;
+  } catch (err) {
+    console.warn("Backend /api/correct falló:", err);
+    return "No pude corregir la frase ahora mismo.";
+  }
 };
 const callGeminiScenarioGen = async () => {
   throw new Error("🔒 Generación de escenarios desactivada por seguridad (mueve a /api/scenario).");
@@ -231,7 +239,7 @@ const ChatMessage = ({ message, isUser, onCorrect, isLast }) => {
               onClick={handleCorrection}
               disabled={isCorrecting}
               className="text-xs text-indigo-500 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded-full flex items-center gap-1 transition-colors border border-indigo-100"
-              title="Corrección desactivada por seguridad (mover a backend)"
+              title="Corregir frase"
             >
               {isCorrecting ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
               <span>Corregir</span>
@@ -711,4 +719,3 @@ export default function App() {
     </div>
   );
 }
-
