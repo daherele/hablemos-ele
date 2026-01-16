@@ -4,7 +4,7 @@ export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
-
+  
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -100,18 +100,18 @@ IMPORTANTE: No escribas texto fuera del JSON. No uses \`\`\`. No pongas frases t
           generationConfig: {
             responseMimeType: "application/json",
             // CLAVE: JSON Schema (minúsculas) para forzar salida válida
-            responseSchema: {
-              type: "object",
-              properties: {
-                reply: { type: "string" },
-                completed_objective_ids: {
-                  type: "array",
-                  items: { type: "string" }
-                }
-              },
-              required: ["reply", "completed_objective_ids"],
-              additionalProperties: false
-            },
+responseSchema: {
+  type: "object",
+  properties: {
+    reply: { type: "string" },
+    completed_objective_ids: {
+      type: "array",
+      items: { type: "string" }
+    }
+  },
+  required: ["reply", "completed_objective_ids"]
+},
+
             temperature: 0.4,
             maxOutputTokens: 220
           }
