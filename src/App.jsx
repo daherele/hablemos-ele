@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   MessageCircle, BookOpen, Send, ArrowLeft, X,
   User, Bot, Sparkles, Volume2, Wand2, Loader2,
@@ -125,7 +125,7 @@ const SafeRender = ({ content }) => {
   return null;
 };
 
-const ChatMessage = ({ message, isUser, onCorrect, isLast }) => {
+const ChatMessage = ({ message, isUser, onCorrect, isLastUser }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [feedback, setFeedback] = useState(null);
   const [isCorrecting, setIsCorrecting] = useState(false);
@@ -176,7 +176,7 @@ const ChatMessage = ({ message, isUser, onCorrect, isLast }) => {
             </button>
           )}
 
-          {isUser && isLast && (
+          {isUser && isLastUser && (
             <button
               onClick={handleCorrection}
               disabled={isCorrecting}
@@ -242,7 +242,7 @@ const ObjectiveItem = ({ objective, onToggle }) => {
         onChange={onToggle}
         className="mt-1 accent-indigo-600"
       />
-      <span className={`text-sm ${completed ? 'line-through text-green-700' : 'text-gray-700'}`}>
+      <span className={`text-sm ${completed ? 'line-through text-green-700' : 'text-gray-800'}`}>
         {text}
       </span>
     </label>
@@ -273,6 +273,14 @@ export default function App() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
+
+  // ✅ índice del último mensaje del usuario (ROBUSTO)
+  const lastUserIndex = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]?.sender === 'user') return i;
+    }
+    return -1;
+  }, [messages]);
 
   const filteredScenarios = scenarios
     .filter(s => {
@@ -368,7 +376,7 @@ export default function App() {
         return copy;
       });
 
-      // Feedback breve (si la frase ya era correcta, el backend debería devolver eso)
+      // Feedback breve
       return explanation ? `💡 ${explanation}` : "✅ Tu frase está bien.";
     } catch (e) {
       return "No pude corregir ahora mismo.";
@@ -543,7 +551,7 @@ export default function App() {
                 message={msg}
                 isUser={msg.sender === 'user'}
                 onCorrect={handleCorrectionRequest}
-                isLast={idx === messages.length - 1}
+                isLastUser={idx === lastUserIndex}
               />
             ))}
 
@@ -597,8 +605,8 @@ export default function App() {
 
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
             <div>
-              <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
-                Objetivos comunicativos (manual)
+              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                Objetivos comunicativos
               </h4>
 
               <div className="space-y-3">
@@ -611,13 +619,13 @@ export default function App() {
                 ))}
               </div>
 
-              <div className="mt-3 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded p-2">
+              <div className="mt-3 text-xs text-gray-700 bg-green-50 border border-green-200 rounded p-2">
                 ✅ Marca tú lo que crees que ya has conseguido.
               </div>
             </div>
 
             <div>
-              <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-1">
+              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1">
                 <BookOpen size={14} /> Léxico útil
               </h4>
               <div className="space-y-1">
