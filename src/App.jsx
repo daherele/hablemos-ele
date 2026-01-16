@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  MessageCircle, BookOpen, Send, ArrowLeft, Utensils, Building2, GraduationCap, Bus, Info, ChevronRight, X,
-  User, Bot, Sparkles, Stethoscope, Briefcase, ShoppingBag, Landmark, Key, ShieldAlert, Volume2, Wand2, Loader2,
-  Home, Users, MapPin, ZapOff, Plus, FileText, CheckCircle, AlertCircle, Target, CheckSquare, Square,
-  HelpCircle, ThumbsUp, ThumbsDown
+  MessageCircle, BookOpen, Send, ArrowLeft, X,
+  User, Bot, Sparkles, Volume2, Wand2, Loader2,
+  Home, ZapOff, Plus, CheckCircle, AlertCircle, Target, CheckSquare, Square,
+  ThumbsDown
 } from 'lucide-react';
 
 /**
@@ -11,9 +11,6 @@ import {
  * - No hay API key en el cliente.
  * - No hay llamadas directas a Google desde el navegador.
  * - El frontend llama a /api/chat (función backend en Vercel).
- *
- * Nota: Corrección / TTS / Generar escenarios quedan desactivados aquí por seguridad
- * hasta que crees sus endpoints backend. (Así no expones la key en cliente).
  */
 
 // --- MOCK AI LOGIC (FALLBACK) ---
@@ -50,12 +47,14 @@ async function postJSON(path, payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+
   let data = null;
   try {
     data = await res.json();
   } catch {
     // si no devuelve JSON, lo dejamos en null
   }
+
   if (!res.ok) {
     const msg = data?.error || `HTTP ${res.status}`;
     throw new Error(msg);
@@ -66,7 +65,6 @@ async function postJSON(path, payload) {
 // ✅ Chat vía backend
 const callGeminiChat = async (history, scenario, level, userMessage, currentObjectives) => {
   try {
-    // Enviamos solo los últimos mensajes para ahorrar coste
     const trimmedHistory = Array.isArray(history) ? history.slice(-6) : [];
 
     const data = await postJSON("/api/chat", {
@@ -77,7 +75,6 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
       currentObjectives
     });
 
-    // Validación mínima para no romper UI
     return {
       reply: typeof data?.reply === "string" ? data.reply : "No pude generar respuesta.",
       objective_updates: Array.isArray(data?.objective_updates) ? data.objective_updates : [],
@@ -99,40 +96,12 @@ const callGeminiCorrection = async (text, level) => {
   };
 };
 
-const callGeminiScenarioGen = async () => {
-  throw new Error("🔒 Generación de escenarios desactivada por seguridad (mueve a /api/scenario).");
-};
 const callGeminiTTS = async () => {
-  // no hace nada por ahora
+  // desactivado por ahora
   return;
 };
 
-function addWavHeader(samples, sampleRate, numChannels) {
-  const buffer = new ArrayBuffer(44 + samples.length);
-  const view = new DataView(buffer);
-  const writeString = (view, offset, string) => {
-    for (let i = 0; i < string.length; i++) { view.setUint8(offset + i, string.charCodeAt(i)); }
-  };
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, 36 + samples.length, true);
-  writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * numChannels * 2, true);
-  view.setUint16(32, numChannels * 2, true);
-  view.setUint16(34, 16, true);
-  writeString(view, 36, 'data');
-  view.setUint32(40, samples.length, true);
-  const dataView = new Uint8Array(buffer);
-  dataView.set(samples, 44);
-  return buffer;
-}
-
 // --- INITIAL DATA ---
-
 const LEVELS = [
   { id: 'A1', label: 'A1 - Acceso', description: 'Vocabulario básico y frases sencillas.', color: 'bg-green-100 text-green-800 border-green-200' },
   { id: 'A2', label: 'A2 - Plataforma', description: 'Descripciones y tareas rutinarias.', color: 'bg-green-200 text-green-900 border-green-300' },
@@ -171,13 +140,9 @@ const INITIAL_SCENARIOS = [
       }
     }
   },
-
-  // (He dejado tu lista tal cual; pega aquí el resto de escenarios sin cambios)
-  // ... family_dinner, cafe, shop, street_directions, doctor, bank, rent, job, police
 ];
 
 // --- COMPONENTS ---
-
 const SafeRender = ({ content }) => {
   if (typeof content === 'string' || typeof content === 'number') return content;
   if (typeof content === 'object') return JSON.stringify(content);
@@ -300,7 +265,7 @@ const ObjectiveItem = ({ objective, onConfirm, onReject }) => {
 
   if (status === 'possible') {
     return (
-      <div className="flex flex-col gap-2 p-3 rounded-lg border bg-yellow-50 border-yellow-200 transition-all animate-in fade-in zoom-in duration-300">
+      <div className="flex flex-col gap-2 p-3 rounded-lg border bg-yellow-50 border-yellow-200 transition-all">
         <div className="flex items-start gap-3">
           <div className="mt-0.5 text-yellow-600"><AlertCircle size={18} /></div>
           <span className="text-sm text-yellow-900 font-medium">{text}</span>
@@ -350,7 +315,6 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState(null);
   const [currentObjectives, setCurrentObjectives] = useState([]);
 
-  // Create Scenario State (desactivado por seguridad hasta backend)
   const [isCreatingScenario, setIsCreatingScenario] = useState(false);
   const [customTopic, setCustomTopic] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -400,7 +364,6 @@ export default function App() {
     e.preventDefault();
     if (!inputText.trim()) return;
 
-    // snapshot del historial antes de añadir el nuevo mensaje
     const historySnapshot = messages;
 
     const userMsg = { id: Date.now(), sender: 'user', text: inputText };
@@ -455,31 +418,31 @@ export default function App() {
     ));
   };
 
+  const handleCorrectionRequest = async (text) => {
+    const { corrected, explanation } = await callGeminiCorrection(text, selectedLevelId);
 
-const handleCorrectionRequest = async (text) => {
-  const { corrected, explanation } = await callGeminiCorrection(text, selectedLevelId);
-
-  // Si no hay corrección, devolvemos algo para que al menos no quede vacío
-  if (!corrected) {
-    return explanation || "No pude corregir ahora mismo.";
-  }
-
-  // Reemplaza el ÚLTIMO mensaje del usuario por la versión corregida
-  setMessages((prev) => {
-    const copy = [...prev];
-    for (let i = copy.length - 1; i >= 0; i--) {
-      if (copy[i]?.sender === "user") {
-        copy[i] = { ...copy[i], text: corrected };
-        break;
-      }
+    if (!corrected) {
+      return explanation || "No pude corregir ahora mismo.";
     }
-    return copy;
-  });
 
-  // Feedback breve (opcional). Si quieres cero feedback, pon: return null;
-  return explanation ? `💡 ${explanation}` : null;
-};
+    setMessages((prev) => {
+      const copy = [...prev];
+      for (let i = copy.length - 1; i >= 0; i--) {
+        if (copy[i]?.sender === "user") {
+          copy[i] = { ...copy[i], text: corrected };
+          break;
+        }
+      }
+      return copy;
+    });
 
+    return explanation ? `💡 ${explanation}` : null;
+  };
+
+  // ✅ ESTA FUNCIÓN FALTABA (causaba el pantallazo en blanco)
+  const handleVocabSelect = (word) => {
+    setInputText((prev) => prev + (prev ? ' ' : '') + word);
+  };
 
   const handleCreateScenario = async (e) => {
     e.preventDefault();
@@ -607,6 +570,23 @@ const handleCorrectionRequest = async (text) => {
     );
   }
 
+  // ✅ Guard anti-pantalla en blanco
+  if (screen === 'chat' && !selectedScenario) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="bg-white border rounded-xl p-4 max-w-md w-full text-center">
+          <p className="text-gray-700 font-medium mb-3">No hay escenario seleccionado.</p>
+          <button
+            onClick={() => setScreen('home')}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg"
+          >
+            Volver al inicio
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // --- RENDER: CHAT SCREEN ---
   return (
     <div className="h-screen bg-gray-100 flex flex-col md:flex-row overflow-hidden font-sans">
@@ -617,7 +597,9 @@ const handleCorrectionRequest = async (text) => {
               <ArrowLeft size={20} />
             </button>
             <div>
-              <h2 className="font-bold text-gray-800 leading-tight text-sm md:text-base">{selectedScenario.title}</h2>
+              <h2 className="font-bold text-gray-800 leading-tight text-sm md:text-base">
+                {selectedScenario?.title || ""}
+              </h2>
               <div className="text-xs text-gray-500">Nivel {selectedLevelId}</div>
             </div>
           </div>
@@ -644,6 +626,7 @@ const handleCorrectionRequest = async (text) => {
                 isLast={idx === messages.length - 1 || idx === messages.length - 2}
               />
             ))}
+
             {isTyping && (
               <div className="flex justify-start w-full mb-4">
                 <div className="flex flex-row items-center bg-white border border-gray-100 p-3 rounded-2xl rounded-tl-none shadow-sm gap-1">
@@ -735,4 +718,3 @@ const handleCorrectionRequest = async (text) => {
     </div>
   );
 }
-
