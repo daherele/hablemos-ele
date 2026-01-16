@@ -307,7 +307,10 @@ export default function App() {
   const [screen, setScreen] = useState("home");
   const [selectedScenario, setSelectedScenario] = useState(null);
   const [selectedLevelId, setSelectedLevelId] = useState("A1");
-  const [scenarios] = useState(INITIAL_SCENARIOS);
+
+  // ✅ Ahora sí: editable para poder añadir escenarios generados
+  const [scenarios, setScenarios] = useState(INITIAL_SCENARIOS);
+
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
   const [isVocabOpen, setIsVocabOpen] = useState(false);
@@ -318,7 +321,9 @@ export default function App() {
 
   const [isCreatingScenario, setIsCreatingScenario] = useState(false);
   const [customTopic, setCustomTopic] = useState("");
-  const [isGenerating] = useState(false);
+
+  // ✅ Generación real: control de estado
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const messagesEndRef = useRef(null);
 
@@ -414,32 +419,31 @@ export default function App() {
     return a === b;
   }
 
-// ✅ autocorrección silenciosa: guarda correction en el mensaje
-async function autoCorrectMessage(messageId, text, level) {
-  try {
-    const { corrected, explanation } = await callGeminiCorrection(text, level);
+  // ✅ autocorrección silenciosa: guarda correction en el mensaje
+  async function autoCorrectMessage(messageId, text, level) {
+    try {
+      const { corrected, explanation } = await callGeminiCorrection(text, level);
 
-    const correctedClean = String(corrected || "").trim();
-    if (!correctedClean) return;
+      const correctedClean = String(corrected || "").trim();
+      if (!correctedClean) return;
 
-    const originalClean = String(text || "").trim();
-    const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
-    if (same) return;
+      const originalClean = String(text || "").trim();
+      const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
+      if (same) return;
 
-    const safeExplanation = sanitizeExplanation(explanation, correctedClean);
+      const safeExplanation = sanitizeExplanation(explanation, correctedClean);
 
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.id === messageId
-          ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } }
-          : m
-      )
-    );
-  } catch {
-    // silencioso
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } }
+            : m
+        )
+      );
+    } catch {
+      // silencioso
+    }
   }
-}
-
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
@@ -459,7 +463,13 @@ async function autoCorrectMessage(messageId, text, level) {
     autoCorrectMessage(userId, userText, selectedLevelId);
 
     try {
-      const responseData = await callGeminiChat(historySnapshot, selectedScenario, selectedLevelId, userText, currentObjectives);
+      const responseData = await callGeminiChat(
+        historySnapshot,
+        selectedScenario,
+        selectedLevelId,
+        userText,
+        currentObjectives
+      );
 
       // ✅ marcar objetivos automáticamente según el backend
       if (responseData?.completed_objective_ids?.length) {
@@ -500,8 +510,8 @@ async function autoCorrectMessage(messageId, text, level) {
       // sin corrección útil
       if (!correctedClean) return "✅ La frase está bien.";
 
-const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
-if (same) return "✅ La frase está bien.";
+      const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
+      if (same) return "✅ La frase está bien.";
 
       const safeExplanation = sanitizeExplanation(explanation, correctedClean);
 
@@ -522,10 +532,56 @@ if (same) return "✅ La frase está bien.";
     setInputText((prev) => prev + (prev ? " " : "") + word);
   };
 
+  // ✅ Crear Situación: ahora sí llama al backend /api/generate-scenario
   const handleCreateScenario = async (e) => {
     e.preventDefault();
-    if (!customTopic.trim()) return;
-    alert("🔒 Por seguridad, 'Crear Situación' está desactivado hasta moverlo a un endpoint backend (/api/scenario).");
+    const topic = customTopic.trim();
+    if (!topic) return;
+
+    try {
+      setIsGenerating(true);
+      setErrorMsg(null);
+
+      // backend: genera un escenario
+      const data = await postJSON("/api/generate-scenario", {
+        level: selectedLevelId,
+        context: topic
+      });
+
+      // adaptamos al formato de tus tarjetas
+      const newScenario = {
+        id: `custom_${crypto.randomUUID()}`,
+        title: data?.title || `Situación: ${topic}`,
+        description: data?.description || "Escenario generado con IA.",
+        difficulty: [data?.level || selectedLevelId],
+        icon: <Sparkles className="w-6 h-6" />,
+        color: "bg-emerald-500",
+        objectives: Array.isArray(data?.objectives)
+          ? data.objectives.map((text, i) => ({ id: `obj_${i}_${crypto.randomUUID()}`, text }))
+          : [],
+        vocab: [],
+        botPersona: {
+          name: data?.roles?.ai || "Asistente",
+          initialMessage: {
+            [data?.level || selectedLevelId]:
+              data?.starter || "¡Perfecto! Empecemos. ¿Qué quieres decir primero?",
+            default: data?.starter || "¡Perfecto! Empecemos."
+          }
+        }
+      };
+
+      // añadimos arriba del todo
+      setScenarios((prev) => [newScenario, ...prev]);
+
+      // cerramos modal y limpiamos
+      setCustomTopic("");
+      setIsCreatingScenario(false);
+    } catch (err) {
+      console.error(err);
+      setErrorMsg(err?.message || "No se pudo generar el escenario.");
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   // --- RENDER: HOME SCREEN ---
@@ -536,25 +592,34 @@ if (same) return "✅ La frase está bien.";
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
               <h3 className="text-xl font-bold text-gray-800 mb-4">✨ Crear Situación</h3>
-              <p className="text-sm text-gray-600 mb-4">Describe la situación que quieres practicar.</p>
+              <p className="text-sm text-gray-600 mb-4">
+                Describe la situación que quieres practicar (ej: <span className="italic">en el aeropuerto</span>).
+              </p>
+
               <form onSubmit={handleCreateScenario}>
                 <input
                   type="text"
                   value={customTopic}
                   onChange={(e) => setCustomTopic(e.target.value)}
-                  placeholder="Ej: En el aeropuerto..."
+                  placeholder="Ej: En la farmacia..."
                   className="w-full border border-gray-300 rounded-lg px-4 py-3 mb-4 focus:ring-2 focus:ring-indigo-500 outline-none"
                   autoFocus
                 />
                 <div className="flex justify-end gap-3">
-                  <button type="button" onClick={() => setIsCreatingScenario(false)} className="px-4 py-2 text-gray-500">
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingScenario(false)}
+                    className="px-4 py-2 text-gray-500"
+                    disabled={isGenerating}
+                  >
                     Cancelar
                   </button>
+
                   <button
                     type="submit"
-                    disabled={true}
+                    disabled={isGenerating || !customTopic.trim()}
                     className="px-4 py-2 bg-indigo-600 text-white rounded-lg flex items-center gap-2 disabled:opacity-50 hover:bg-indigo-700"
-                    title="Desactivado hasta backend (/api/scenario)"
+                    title="Generar escenario con IA"
                   >
                     {isGenerating ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
                     {isGenerating ? "Creando..." : "Generar"}
@@ -587,6 +652,12 @@ if (same) return "✅ La frase está bien.";
         </header>
 
         <main className="max-w-5xl mx-auto px-4 py-8">
+          {errorMsg && (
+            <div className="mb-6 text-sm text-red-600 bg-red-50 border border-red-200 p-3 rounded-lg">
+              {errorMsg}
+            </div>
+          )}
+
           <div className="mb-8">
             <h2 className="text-2xl font-bold text-gray-900 mb-2">Selecciona tu Nivel</h2>
             <div className="flex flex-wrap gap-2 md:gap-3 mb-8">
@@ -608,16 +679,16 @@ if (same) return "✅ La frase está bien.";
               <div
                 onClick={() => setIsCreatingScenario(true)}
                 className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl shadow-md border-0 overflow-hidden cursor-pointer transition-all hover:-translate-y-1 hover:shadow-lg flex flex-col items-center justify-center text-white p-6 group min-h-[200px]"
-                title="Desactivado hasta backend (/api/scenario)"
+                title="Crear una situación con IA"
               >
                 <div className="bg-white/20 p-4 rounded-full mb-4 group-hover:scale-110 transition-transform">
                   <Plus size={32} />
                 </div>
                 <h3 className="font-bold text-lg text-center">Crear Situación</h3>
                 <p className="text-indigo-100 text-xs text-center mt-2">
-                  Desactivado por seguridad
+                  Genera un escenario nuevo
                   <br />
-                  hasta moverlo al backend.
+                  para practicar conversación.
                 </p>
               </div>
 
@@ -748,14 +819,19 @@ if (same) return "✅ La frase está bien.";
               <Target size={18} className="text-indigo-600" />
               <h3>Tu Misión</h3>
             </div>
-            <button onClick={() => setIsVocabOpen(false)} className="md:hidden text-gray-500 hover:bg-gray-200 rounded p-1">
+            <button
+              onClick={() => setIsVocabOpen(false)}
+              className="md:hidden text-gray-500 hover:bg-gray-200 rounded p-1"
+            >
               <X size={20} />
             </button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
             <div>
-              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Objetivos comunicativos</h4>
+              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                Objetivos comunicativos
+              </h4>
 
               <div className="space-y-3">
                 {currentObjectives.map((obj) => (
@@ -783,7 +859,7 @@ if (same) return "✅ La frase está bien.";
       </div>
 
       {isVocabOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-25 z-10 md:hidden" onClick={() => setIsVocabOpen(false)}></div>
+        <div className="fixed inset-0 bg-black bg-opacity-25 z-10 md:hidden" onClick={() => setIsVocabOpen(false)} />
       )}
     </div>
   );
