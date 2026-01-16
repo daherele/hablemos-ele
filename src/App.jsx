@@ -75,11 +75,13 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
       currentObjectives
     });
 
-    return {
-      reply: typeof data?.reply === "string" ? data.reply : "No pude generar respuesta.",
-      objective_updates: Array.isArray(data?.objective_updates) ? data.objective_updates : [],
-      follow_up_question: typeof data?.follow_up_question === "string" ? data.follow_up_question : ""
-    };
+return {
+  reply: typeof data?.reply === "string" ? data.reply : "No pude generar respuesta.",
+  objective_updates: Array.isArray(data?.objective_updates) ? data.objective_updates : [],
+  follow_up_question: typeof data?.follow_up_question === "string" ? data.follow_up_question : "",
+  completed_objective_ids: Array.isArray(data?.completed_objective_ids) ? data.completed_objective_ids : []
+};
+
   } catch (err) {
     console.warn("Backend /api/chat falló, usando modo demo:", err);
     return generateMockReply(userMessage, scenario?.id);
@@ -373,13 +375,18 @@ export default function App() {
     setErrorMsg(null);
 
     try {
-      const responseData = await callGeminiChat(
-        historySnapshot,
-        selectedScenario,
-        selectedLevelId,
-        userMsg.text,
-        currentObjectives
-      );
+      
+// ✅ Opción A: marcar automáticamente objetivos completados desde backend
+if (Array.isArray(responseData.completed_objective_ids) && responseData.completed_objective_ids.length > 0) {
+  setCurrentObjectives(prev =>
+    prev.map(obj =>
+      responseData.completed_objective_ids.includes(obj.id)
+        ? { ...obj, status: "confirmed" }
+        : obj
+    )
+  );
+}
+
 
       if (responseData.objective_updates && responseData.objective_updates.length > 0) {
         setCurrentObjectives(prev => prev.map(obj => {
