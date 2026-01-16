@@ -425,7 +425,7 @@ export default function App() {
       const originalClean = String(text || "").trim();
 const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
 if (same) return;
-
+}
 
       const safeExplanation = sanitizeExplanation(explanation, correctedClean);
 
