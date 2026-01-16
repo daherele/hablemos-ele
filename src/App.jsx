@@ -455,9 +455,6 @@ export default function App() {
     ));
   };
 
-  const handleCorrectionRequest = async (text) => {
-    return await callGeminiCorrection(text, selectedLevelId);
-  };
 
 const handleCorrectionRequest = async (text) => {
   const { corrected, explanation } = await callGeminiCorrection(text, selectedLevelId);
