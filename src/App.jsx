@@ -350,6 +350,35 @@ export default function App() {
     return one;
   };
 
+  function normalizeForCompare(s) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // quita tildes
+    .replace(/[.,;:!?¡¿"“”'()]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isOnlyStylisticChange(original, corrected) {
+  const a = normalizeForCompare(original);
+  const b = normalizeForCompare(corrected);
+
+  // Si tras normalizar son iguales → cambio solo de mayúsculas, tildes o puntuación
+  if (a === b) return true;
+
+  // Si la diferencia es muy pequeña (p.ej. “Hola María” vs “Hola, María”)
+  // medimos por tokens
+  const at = a.split(" ");
+  const bt = b.split(" ");
+  if (at.length === bt.length) {
+    let diff = 0;
+    for (let i = 0; i < at.length; i++) if (at[i] !== bt[i]) diff++;
+    if (diff <= 1) return true;
+  }
+  return false;
+}
+
+  
   // ✅ autocorrección silenciosa: guarda correction en el mensaje
   async function autoCorrectMessage(messageId, text, level) {
     try {
@@ -436,9 +465,67 @@ export default function App() {
       const { corrected, explanation } = await callGeminiCorrection(message.text, selectedLevelId);
 
       const correctedClean = String(corrected || "").trim();
-      const same =
-        correctedClean.toLowerCase() === String(message.text).trim().toLowerCase();
 
+
+// ✅ sanitiza explicaciones técnicas para alumnos
+const sanitizeExplanation = (explanation, corrected) => {
+  const t = String(explanation || "").trim();
+  if (!t) return corrected ? "Prueba esta versión." : "✅ La frase está bien.";
+
+  const lower = t.toLowerCase();
+  if (
+    lower.includes("no pude devolver json") ||
+    lower.includes("json requested") ||
+    lower.includes("here is") ||
+    lower.includes("the json")
+  ) {
+    return corrected ? "Prueba esta versión." : "✅ La frase está bien.";
+  }
+
+  // 1 frase máx.
+  const one = t.split(/(?<=[.!?])\s+/)[0];
+  return one;
+};
+
+function normalizeForCompare(s) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // quita tildes
+    .replace(/[.,;:!?¡¿"“”'()]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * ✅ SOLO consideramos "estético" si tras normalizar es EXACTAMENTE igual.
+ * (mayúsculas, tildes, puntuación, dobles espacios)
+ * Nada de heurísticas por tokens, porque puede colarse cambio de significado.
+ */
+function isOnlyStylisticChange(original, corrected) {
+  const a = normalizeForCompare(original);
+  const b = normalizeForCompare(corrected);
+  return a === b;
+}
+
+  // Si tras normalizar son iguales → cambio solo de mayúsculas, tildes o puntuación
+  if (a === b) return true;
+
+  // Si la diferencia es muy pequeña (p.ej. “Hola María” vs “Hola, María”)
+  // medimos por tokens
+  const at = a.split(" ");
+  const bt = b.split(" ");
+  if (at.length === bt.length) {
+    let diff = 0;
+    for (let i = 0; i < at.length; i++) if (at[i] !== bt[i]) diff++;
+    if (diff <= 1) return true;
+  }
+  return false;
+}
+
+  
+  // ✅ autocorrección silenciosa: guarda correction en el mensaje
+
+      
       if (!correctedClean || same) {
         return "✅ La frase está bien.";
       }
