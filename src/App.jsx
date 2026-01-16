@@ -29,7 +29,7 @@ import {
 const generateMockReply = () => {
   const responses = ["¡Hola! ¿Cómo estás?", "Entiendo, cuéntame más.", "Muy bien."];
   const reply = responses[Math.floor(Math.random() * responses.length)];
-  return { reply: `(Demo) ${reply}` };
+  return { reply: `(Demo) " + reply };
 };
 
 // --- BACKEND CALLS (/api/*) ---
@@ -75,7 +75,7 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
     };
   } catch (err) {
     console.warn("Backend /api/chat falló, usando modo demo:", err);
-    const demo = generateMockReply();
+    const demo = Reply();
     return { reply: demo.reply, completed_objective_ids: [] };
   }
 };
