@@ -1,4 +1,3 @@
-```jsx
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   MessageCircle,
@@ -22,14 +21,13 @@ import {
  * ✅ Frontend seguro:
  * - No API key en cliente.
  * - Chat y Corrección vía endpoints backend: /api/chat y /api/correct
- * - Crear escenario vía backend: /api/generate-scenario
  */
 
 // --- MOCK AI LOGIC (FALLBACK) ---
 const generateMockReply = () => {
   const responses = ["¡Hola! ¿Cómo estás?", "Entiendo, cuéntame más.", "Muy bien."];
   const reply = responses[Math.floor(Math.random() * responses.length)];
-  return { reply: `(Demo) " + reply };
+  return { reply: `(Demo) ${reply}` };
 };
 
 // --- BACKEND CALLS (/api/*) ---
@@ -49,8 +47,7 @@ async function postJSON(path, payload) {
 
   if (!res.ok) {
     const msg = data?.error || `HTTP ${res.status}`;
-    const details = data?.details ? ` — ${data.details}` : "";
-    throw new Error(`${msg}${details}`);
+    throw new Error(msg);
   }
   return data;
 }
@@ -75,7 +72,7 @@ const callGeminiChat = async (history, scenario, level, userMessage, currentObje
     };
   } catch (err) {
     console.warn("Backend /api/chat falló, usando modo demo:", err);
-    const demo = Reply();
+    const demo = generateMockReply();
     return { reply: demo.reply, completed_objective_ids: [] };
   }
 };
@@ -187,7 +184,7 @@ const ChatMessage = ({ message, isUser, onCorrect, isLastUser }) => {
   const handleCorrection = async () => {
     setIsCorrecting(true);
     try {
-      const resultText = await onCorrect(message);
+      const resultText = await onCorrect(message); // pasamos el mensaje entero
       setFeedback(resultText);
     } finally {
       setIsCorrecting(false);
@@ -215,6 +212,7 @@ const ChatMessage = ({ message, isUser, onCorrect, isLastUser }) => {
           >
             <SafeRender content={message.text} />
 
+            {/* ✅ Mostrar corrección inline debajo del texto del alumno (sin reemplazarlo) */}
             {isUser && message?.correction?.corrected && (
               <div className="mt-2 text-xs text-indigo-100">
                 ✨ <span className="font-semibold">Corregir:</span>{" "}
@@ -293,6 +291,7 @@ const LevelBadge = ({ level, selected, onClick }) => (
   </button>
 );
 
+// Objetivos (auto + manual)
 const ObjectiveItem = ({ objective, onToggle }) => {
   const { text, completed } = objective;
 
@@ -309,7 +308,7 @@ export default function App() {
   const [selectedScenario, setSelectedScenario] = useState(null);
   const [selectedLevelId, setSelectedLevelId] = useState("A1");
 
-  // ✅ IMPORTANTE: ahora podemos añadir escenarios generados
+  // ✅ Ahora sí: editable para poder añadir escenarios generados
   const [scenarios, setScenarios] = useState(INITIAL_SCENARIOS);
 
   const [messages, setMessages] = useState([]);
@@ -322,6 +321,8 @@ export default function App() {
 
   const [isCreatingScenario, setIsCreatingScenario] = useState(false);
   const [customTopic, setCustomTopic] = useState("");
+
+  // ✅ Generación real: control de estado
   const [isGenerating, setIsGenerating] = useState(false);
 
   const messagesEndRef = useRef(null);
@@ -379,6 +380,7 @@ export default function App() {
     setCurrentObjectives((prev) => prev.map((obj) => (obj.id === id ? { ...obj, completed: !obj.completed } : obj)));
   };
 
+  // ✅ sanitiza explicaciones técnicas para alumnos
   const sanitizeExplanation = (explanation, corrected) => {
     const t = String(explanation || "").trim();
     if (!t) return corrected ? "Prueba esta versión." : "✅ La frase está bien.";
@@ -392,10 +394,32 @@ export default function App() {
     ) {
       return corrected ? "Prueba esta versión." : "✅ La frase está bien.";
     }
+    // 1 frase máx.
     const one = t.split(/(?<=[.!?])\s+/)[0];
     return one;
   };
 
+  function normalizeForCompare(s) {
+    return String(s || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "") // quita tildes
+      .replace(/[.,;:!?¡¿"“”'()]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  /**
+   * ✅ SOLO consideramos "estético" si tras normalizar es EXACTAMENTE igual.
+   * (mayúsculas, tildes, puntuación, dobles espacios)
+   */
+  function isOnlyStylisticChange(original, corrected) {
+    const a = normalizeForCompare(original);
+    const b = normalizeForCompare(corrected);
+    return a === b;
+  }
+
+  // ✅ autocorrección silenciosa: guarda correction en el mensaje
   async function autoCorrectMessage(messageId, text, level) {
     try {
       const { corrected, explanation } = await callGeminiCorrection(text, level);
@@ -411,7 +435,9 @@ export default function App() {
 
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === messageId ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } } : m
+          m.id === messageId
+            ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } }
+            : m
         )
       );
     } catch {
@@ -433,6 +459,7 @@ export default function App() {
     setIsTyping(true);
     setErrorMsg(null);
 
+    // ✅ autocorrección en paralelo (no bloquea)
     autoCorrectMessage(userId, userText, selectedLevelId);
 
     try {
@@ -444,6 +471,7 @@ export default function App() {
         currentObjectives
       );
 
+      // ✅ marcar objetivos automáticamente según el backend
       if (responseData?.completed_objective_ids?.length) {
         const completedIds = new Set(responseData.completed_objective_ids);
         setCurrentObjectives((prev) =>
@@ -464,8 +492,10 @@ export default function App() {
     }
   };
 
+  // ✅ botón Corregir: feedback breve y útil, sin reemplazar el texto del alumno
   const handleCorrectionRequest = async (message) => {
     try {
+      // si ya tenemos corrección guardada, la reutilizamos
       if (message?.correction?.corrected) {
         const exp = sanitizeExplanation(message?.correction?.explanation, message.correction.corrected);
         return `💡 ${exp}`;
@@ -477,6 +507,7 @@ export default function App() {
       const { corrected, explanation } = await callGeminiCorrection(originalClean, selectedLevelId);
       const correctedClean = String(corrected || "").trim();
 
+      // sin corrección útil
       if (!correctedClean) return "✅ La frase está bien.";
 
       const same = correctedClean.toLowerCase() === originalClean.toLowerCase();
@@ -484,6 +515,7 @@ export default function App() {
 
       const safeExplanation = sanitizeExplanation(explanation, correctedClean);
 
+      // guardamos correction para que se vea “✨ Corregir: …”
       setMessages((prev) =>
         prev.map((m) =>
           m.id === message.id ? { ...m, correction: { corrected: correctedClean, explanation: safeExplanation } } : m
@@ -500,54 +532,53 @@ export default function App() {
     setInputText((prev) => prev + (prev ? " " : "") + word);
   };
 
-  // ✅ Crear escenario con IA (backend)
-  const createScenarioFromAI = async (topic) => {
-    const data = await postJSON("/api/generate-scenario", {
-      level: selectedLevelId,
-      context: topic
-    });
-
-    const newScenario = {
-      id: `custom_${crypto.randomUUID()}`,
-      title: data.title,
-      difficulty: [data.level || selectedLevelId],
-      icon: <MessageCircle className="w-6 h-6" />,
-      description: data.description,
-      color: "bg-emerald-500",
-      objectives: (data.objectives || []).map((t) => ({
-        id: `obj_${crypto.randomUUID()}`,
-        text: String(t || "").trim()
-      })),
-      vocab: [],
-      botPersona: {
-        name: data.roles?.ai || "Interlocutor",
-        initialMessage: {
-          [data.level || selectedLevelId]: data.starter || "¡Hola! ¿En qué puedo ayudarte?",
-          default: data.starter || "¡Hola! ¿En qué puedo ayudarte?"
-        }
-      }
-    };
-
-    setScenarios((prev) => [newScenario, ...prev]);
-
-    // Cierra modal y entra al chat
-    setIsCreatingScenario(false);
-    setCustomTopic("");
-    startChat(newScenario);
-  };
-
+  // ✅ Crear Situación: ahora sí llama al backend /api/generate-scenario
   const handleCreateScenario = async (e) => {
     e.preventDefault();
-    if (!customTopic.trim()) return;
-
-    setIsGenerating(true);
-    setErrorMsg(null);
+    const topic = customTopic.trim();
+    if (!topic) return;
 
     try {
-      await createScenarioFromAI(customTopic.trim());
+      setIsGenerating(true);
+      setErrorMsg(null);
+
+      // backend: genera un escenario
+      const data = await postJSON("/api/generate-scenario", {
+        level: selectedLevelId,
+        context: topic
+      });
+
+      // adaptamos al formato de tus tarjetas
+      const newScenario = {
+        id: `custom_${crypto.randomUUID()}`,
+        title: data?.title || `Situación: ${topic}`,
+        description: data?.description || "Escenario generado con IA.",
+        difficulty: [data?.level || selectedLevelId],
+        icon: <Sparkles className="w-6 h-6" />,
+        color: "bg-emerald-500",
+        objectives: Array.isArray(data?.objectives)
+          ? data.objectives.map((text, i) => ({ id: `obj_${i}_${crypto.randomUUID()}`, text }))
+          : [],
+        vocab: [],
+        botPersona: {
+          name: data?.roles?.ai || "Asistente",
+          initialMessage: {
+            [data?.level || selectedLevelId]:
+              data?.starter || "¡Perfecto! Empecemos. ¿Qué quieres decir primero?",
+            default: data?.starter || "¡Perfecto! Empecemos."
+          }
+        }
+      };
+
+      // añadimos arriba del todo
+      setScenarios((prev) => [newScenario, ...prev]);
+
+      // cerramos modal y limpiamos
+      setCustomTopic("");
+      setIsCreatingScenario(false);
     } catch (err) {
       console.error(err);
-      setErrorMsg(err?.message || "No se pudo generar el escenario");
+      setErrorMsg(err?.message || "No se pudo generar el escenario.");
     } finally {
       setIsGenerating(false);
     }
@@ -560,8 +591,10 @@ export default function App() {
         {isCreatingScenario && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
-              <h3 className="text-xl font-bold text-gray-800 mb-2">✨ Crear Situación</h3>
-              <p className="text-sm text-gray-600 mb-4">Describe la situación que quieres practicar.</p>
+              <h3 className="text-xl font-bold text-gray-800 mb-4">✨ Crear Situación</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Describe la situación que quieres practicar (ej: <span className="italic">en el aeropuerto</span>).
+              </p>
 
               <form onSubmit={handleCreateScenario}>
                 <input
@@ -572,7 +605,6 @@ export default function App() {
                   className="w-full border border-gray-300 rounded-lg px-4 py-3 mb-4 focus:ring-2 focus:ring-indigo-500 outline-none"
                   autoFocus
                 />
-
                 <div className="flex justify-end gap-3">
                   <button
                     type="button"
@@ -585,8 +617,9 @@ export default function App() {
 
                   <button
                     type="submit"
-                    disabled={isGenerating}
+                    disabled={isGenerating || !customTopic.trim()}
                     className="px-4 py-2 bg-indigo-600 text-white rounded-lg flex items-center gap-2 disabled:opacity-50 hover:bg-indigo-700"
+                    title="Generar escenario con IA"
                   >
                     {isGenerating ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
                     {isGenerating ? "Creando..." : "Generar"}
@@ -620,7 +653,7 @@ export default function App() {
 
         <main className="max-w-5xl mx-auto px-4 py-8">
           {errorMsg && (
-            <div className="mb-5 text-sm text-red-700 bg-red-50 border border-red-200 p-3 rounded-lg">
+            <div className="mb-6 text-sm text-red-600 bg-red-50 border border-red-200 p-3 rounded-lg">
               {errorMsg}
             </div>
           )}
@@ -646,6 +679,7 @@ export default function App() {
               <div
                 onClick={() => setIsCreatingScenario(true)}
                 className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl shadow-md border-0 overflow-hidden cursor-pointer transition-all hover:-translate-y-1 hover:shadow-lg flex flex-col items-center justify-center text-white p-6 group min-h-[200px]"
+                title="Crear una situación con IA"
               >
                 <div className="bg-white/20 p-4 rounded-full mb-4 group-hover:scale-110 transition-transform">
                   <Plus size={32} />
@@ -785,14 +819,19 @@ export default function App() {
               <Target size={18} className="text-indigo-600" />
               <h3>Tu Misión</h3>
             </div>
-            <button onClick={() => setIsVocabOpen(false)} className="md:hidden text-gray-500 hover:bg-gray-200 rounded p-1">
+            <button
+              onClick={() => setIsVocabOpen(false)}
+              className="md:hidden text-gray-500 hover:bg-gray-200 rounded p-1"
+            >
               <X size={20} />
             </button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
             <div>
-              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Objetivos comunicativos</h4>
+              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                Objetivos comunicativos
+              </h4>
 
               <div className="space-y-3">
                 {currentObjectives.map((obj) => (
@@ -820,9 +859,8 @@ export default function App() {
       </div>
 
       {isVocabOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-25 z-10 md:hidden" onClick={() => setIsVocabOpen(false)}></div>
+        <div className="fixed inset-0 bg-black bg-opacity-25 z-10 md:hidden" onClick={() => setIsVocabOpen(false)} />
       )}
     </div>
   );
 }
-```
