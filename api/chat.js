@@ -225,6 +225,8 @@ Devuelve SOLO el texto, sin comillas, sin JSON, sin markdown.
           ? parsed.reply.trim()
           : cleanModelText(fallbackText);
 
+
+
       const ids = Array.isArray(parsed?.completed_objective_ids)
         ? parsed.completed_objective_ids.map((x) => String(x))
         : [];
@@ -325,7 +327,16 @@ Devuelve SOLO el texto, sin comillas, sin JSON, sin markdown.
           const immersive = await miniImmersiveFallback();
           norm2.reply = immersive || "Perdón 🙂 ¿Puedes concretarlo un poco más?";
         }
+const hasQuestion = /[?¿]/.test(norm.reply);
+if (!hasQuestion) {
+  const immersive = await miniImmersiveFallback();
+  if (immersive) norm.reply = immersive;
+}
 
+
+
+
+        
         return res.status(200).json(norm2);
       } catch {
         const immersive = await miniImmersiveFallback();
