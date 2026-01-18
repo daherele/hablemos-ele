@@ -58,10 +58,19 @@ Estructura exacta:
 Reglas:
 - Situación cotidiana y realista para ELE.
 - Nivel ${level}.
-- objectives: 3 a 8 strings.
+- objectives: 4 a 6 strings (atómicos, una sola acción cada uno).
 - starter: una primera frase del interlocutor (AI) para iniciar la conversación.
 `.trim();
 
+  Reglas adicionales para objectives (MUY IMPORTANTE):
+- Cada objetivo debe ser atómico: UNA sola acción comunicativa.
+- Prohibido usar "y", "e", "o", "/" para combinar acciones.
+- Prohibido incluir dos verbos en el mismo objetivo.
+- Formato recomendado: verbo + complemento (ej: "Saludar al interlocutor.", "Pedir un producto concreto.", "Preguntar el precio de un artículo.").
+- Máximo 10 palabras por objetivo.
+- Devuelve entre 4 y 6 objetivos.
+
+  
   const payload = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: {
