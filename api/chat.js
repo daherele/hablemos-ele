@@ -58,17 +58,14 @@ export default async function handler(req, res) {
     const allowedObjectiveIds = new Set(normalizedObjectives.map((o) => o.id));
 
     const objectivesList = normalizedObjectives
-      .map(
-        (o) =>
-          `- ID: "${o.id}": ${o.text} (Estado: ${o.completed ? "Completado" : "Pendiente"})`
-      )
+      .map((o) => `- ID: "${o.id}": ${o.text} (Estado: ${o.completed ? "Completado" : "Pendiente"})`)
       .join("\n");
 
     function getPendingObjectives(limit = 2) {
       return normalizedObjectives.filter((o) => !o.completed).slice(0, limit);
     }
 
-    const pendingObjectives = getPendingObjectives(6);
+    const pendingObjectives = normalizedObjectives.filter((o) => !o.completed);
 
     // 4) Prompt base (Opción A + anti-respuestas vacías)
     const baseSystemPrompt = `
@@ -210,6 +207,42 @@ PROHIBIDO:
       return false;
     }
 
+    // --- detección genérica de elipsis A1 + aclaraciones inútiles ---
+    function isA1EllipticUserUtterance(userMsg, level) {
+      const lvl = String(level || "").toUpperCase();
+      if (lvl !== "A1") return false;
+
+      const s = String(userMsg || "").trim();
+      if (!s) return false;
+
+      const words = s.split(/\s+/).filter(Boolean);
+      if (words.length < 1 || words.length > 5) return false;
+
+      // Si contiene verbos comunes, NO lo consideramos elipsis nominal típica
+      const hasCommonVerb =
+        /\b(quiero|quisiera|busco|necesito|tengo|hay|es|son|estoy|está|están|puedo|puede)\b/i.test(s);
+      if (hasCommonVerb) return false;
+
+      // Solo letras/espacios y conectores normales (evita basura)
+      const mostlyWords = /^[\p{L}\p{M}\s'-]+$/u.test(s);
+      if (!mostlyWords) return false;
+
+      return true;
+    }
+
+    function isBadClarificationQuestion(reply) {
+      const r = String(reply || "").trim().toLowerCase();
+
+      // "¿De qué?" / "¿De qué" truncado
+      if (/^¿?\s*de\s+qué\b/.test(r)) return true;
+
+      // Preguntas genéricas inútiles
+      if (r === "¿qué?" || r === "que?" || r === "¿qué") return true;
+      if (r === "¿cuál?" || r === "cual?" || r === "¿cuál") return true;
+
+      return false;
+    }
+
     function safeNormalizeParsed(parsed, fallbackText) {
       const reply =
         typeof parsed?.reply === "string" && parsed.reply.trim()
@@ -220,7 +253,7 @@ PROHIBIDO:
       const ids = Array.isArray(parsed?.completed_objective_ids)
         ? parsed.completed_objective_ids
             .map((x) => String(x))
-            .filter((id) => allowedObjectiveIds.size ? allowedObjectiveIds.has(id) : Boolean(id))
+            .filter((id) => (allowedObjectiveIds.size ? allowedObjectiveIds.has(id) : Boolean(id)))
         : [];
 
       return { reply: reply || "", completed_objective_ids: ids };
@@ -231,8 +264,7 @@ PROHIBIDO:
         ? `${baseSystemPrompt}\n\nULTIMA REGLA: el primer carácter de tu respuesta debe ser { y el último }`
         : baseSystemPrompt;
 
-      const url =
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
       let r;
       try {
@@ -312,8 +344,7 @@ Escribe SOLO 1 intervención natural (máx. 2 frases cortas) que:
 Devuelve SOLO el texto, sin comillas, sin JSON, sin markdown.
 `.trim();
 
-      const url =
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
       let r;
       try {
@@ -360,52 +391,63 @@ Devuelve SOLO el texto, sin comillas, sin JSON, sin markdown.
       let needsFallback = false;
 
       // --- Early-exit por nivel (reduce mini-calls en A1/A2) ---
-const lvl = String(level || "").toUpperCase();
-const isLowLevel = lvl === "A1" || lvl === "A2";
+      const lvl = String(level || "").toUpperCase();
+      const isLowLevel = lvl === "A1" || lvl === "A2";
 
-// Si es A1/A2, solo hacemos mini-call si es "claramente malo"
-// (vacío, irrelevante, o relleno muy típico)
-if (isLowLevel) {
-  const replyRaw = String(norm.reply || "").trim();
-  const replyCore = replyRaw.toLowerCase().replace(/[.,!?¿¡]/g, "").trim();
+      if (isLowLevel) {
+        const replyRaw = String(norm.reply || "").trim();
+        const replyCore = replyRaw.toLowerCase().replace(/[.,!?¿¡]/g, "").trim();
 
-const clearlyBad =
-  !replyRaw ||
-  replyRaw.length < 4 ||         
-  replyRaw.endsWith(",") ||      
-  isIrrelevantReply(replyRaw, userMessage) ||
-  ["hola", "claro", "vale", "ah", "ajá", "aja", "sí", "si", "ok"].includes(replyCore);
+        const clearlyBad =
+          !replyRaw ||
+          replyRaw.length < 4 ||
+          replyRaw.endsWith(",") ||
+          isIrrelevantReply(replyRaw, userMessage) ||
+          ["hola", "claro", "vale", "ah", "ajá", "aja", "sí", "si", "ok"].includes(replyCore);
 
-  if (!clearlyBad) {
-    // ✅ A1/A2: si no es claramente malo, NO hacemos mini-call
-    return norm;
-  }
-  // Si es claramente malo, seguimos con tus reglas normales (caerá en fallback)
-}
+        if (!clearlyBad) {
+          return norm; // ✅ A1/A2: si no es claramente malo, NO hacemos mini-call
+        }
+      }
 
+      // --- Micro-error #2 corregido: prioridad a elipsis A1 (si es elíptico, guiamos) ---
+      if (isA1EllipticUserUtterance(userMessage, level)) {
+        const immersive = await miniImmersiveFallback();
+        if (immersive) {
+          norm.reply = immersive;
+          return norm;
+        }
+      }
+
+      // --- Guardia anti "¿De qué?" en A1 con respuesta elíptica ---
+      if (isA1EllipticUserUtterance(userMessage, level) && isBadClarificationQuestion(norm.reply)) {
+        const immersive = await miniImmersiveFallback();
+        if (immersive) norm.reply = immersive;
+        return norm;
+      }
 
       if (!norm.reply) needsFallback = true;
 
       // 1) Respuesta débil o típica de relleno
       if (isWeakReply(norm.reply)) needsFallback = true;
 
-      // 2) Irrelevante al mensaje del alumno (ej: "Hola" tras "Quiero un pepino")
+      // 2) Irrelevante al mensaje del alumno
       if (isIrrelevantReply(norm.reply, userMessage)) needsFallback = true;
 
-      // 3) Referencia implícita (lo de siempre...) sin concreción
+      // 3) Referencia implícita sin concreción
+      const userIsAmbiguous = hasImplicitReference(userMessage) || isA1EllipticUserUtterance(userMessage, level);
+
       if (hasImplicitReference(userMessage)) {
-        // si el usuario NO aporta información extra (sigue vago), desambiguamos
         const u = userMessage.toLowerCase();
         const hasNumberOrQty = /\b(un|una|dos|tres|cuatro|cinco|\d+|kilo|kilos|medio)\b/i.test(u);
-        const hasSpecificNoun = u.length > 0 && u.split(/\s+/).length >= 4; // “pues lo de siempre gracias” etc.
+        const hasSpecificNoun = u.length > 0 && u.split(/\s+/).length >= 4;
+
         if (!hasNumberOrQty && !hasSpecificNoun) needsFallback = true;
-        // aunque haya palabras, sigue siendo implícito; normalmente conviene desambiguar
-        needsFallback = true;
       }
 
-      // 4) Si hay objetivos pendientes, exigimos pregunta (para guiar)
+      // --- Micro-error #1 corregido: NO exigir pregunta siempre; solo si el user fue ambiguo ---
       const hasQuestion = /[?¿]/.test(norm.reply);
-      if (pendingObjectives.length > 0 && !hasQuestion) needsFallback = true;
+      if (pendingObjectives.length > 0 && userIsAmbiguous && !hasQuestion) needsFallback = true;
 
       if (needsFallback) {
         const immersive = await miniImmersiveFallback();
@@ -443,9 +485,7 @@ const clearlyBad =
 
         return res.status(200).json({
           reply: immersive || fallbackReply || "Perdón 🙂 ¿Puedes concretarlo un poco más?",
-          completed_objective_ids: Array.isArray(incomingCompletedIds)
-            ? incomingCompletedIds.map(String)
-            : []
+          completed_objective_ids: Array.isArray(incomingCompletedIds) ? incomingCompletedIds.map(String) : []
         });
       }
 
@@ -460,9 +500,7 @@ const clearlyBad =
 
         return res.status(200).json({
           reply: immersive || fallbackReply || "Perdón 🙂 ¿Puedes concretarlo un poco más?",
-          completed_objective_ids: Array.isArray(incomingCompletedIds)
-            ? incomingCompletedIds.map(String)
-            : []
+          completed_objective_ids: Array.isArray(incomingCompletedIds) ? incomingCompletedIds.map(String) : []
         });
       }
     }
@@ -479,9 +517,7 @@ const clearlyBad =
 
       return res.status(200).json({
         reply: immersive || fallbackReply || "Perdón 🙂 ¿Puedes concretarlo un poco más?",
-        completed_objective_ids: Array.isArray(incomingCompletedIds)
-          ? incomingCompletedIds.map(String)
-          : []
+        completed_objective_ids: Array.isArray(incomingCompletedIds) ? incomingCompletedIds.map(String) : []
       });
     }
   } catch (err) {
