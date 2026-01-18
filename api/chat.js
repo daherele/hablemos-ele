@@ -26,7 +26,7 @@ export default async function handler(req, res) {
       scenario,
       level = "A1",
       userMessage,
-      currentObjectives = []
+      currentObjectives = [],
       completed_objective_ids = [] 
     } = body;
 
