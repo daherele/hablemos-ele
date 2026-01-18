@@ -27,6 +27,7 @@ export default async function handler(req, res) {
       level = "A1",
       userMessage,
       currentObjectives = []
+      completed_objective_ids = [] 
     } = body;
 
     if (!scenario?.title || !scenario?.botPersona?.name) {
@@ -44,6 +45,7 @@ export default async function handler(req, res) {
         text: String(m?.text ?? "").replace(/^\(Demo\)\s*/i, "")
       }));
 
+    // 3) Objetivos a texto (para prompt)
     const objectivesList = (Array.isArray(currentObjectives) ? currentObjectives : [])
       .map((o) => {
         const id = String(o?.id ?? "");
@@ -53,6 +55,7 @@ export default async function handler(req, res) {
       })
       .join("\n");
 
+    // 4) Prompt base (Opción A: regla crítica)
     const baseSystemPrompt = `
 Actúa como un interlocutor nativo en un escenario de práctica de español.
 
@@ -71,6 +74,11 @@ REGLAS:
 - NO expliques gramática ni evalúes.
 - Interpreta con buena fe.
 - Termina normalmente con una pregunta breve.
+
+REGLA CRÍTICA (muy importante):
+- Si el mensaje del alumno es comprensible pero NO avanza claramente ningún objetivo pendiente (es ambiguo, demasiado corto o no aporta información nueva),
+  NO digas "¿qué quieres hacer ahora?" ni rompas la ficción.
+  En su lugar, haz una pregunta NATURAL del escenario para conseguir el dato que falta o ofrece 2-3 opciones concretas dentro del contexto.
 
 REFORMULACIÓN:
 - Si el mensaje del alumno tiene errores pero se entiende, empieza tu respuesta con una reformulación breve:
@@ -133,17 +141,98 @@ PROHIBIDO:
       }
     }
 
+    function getPendingObjectiveTexts(limit = 2) {
+      const arr = Array.isArray(currentObjectives) ? currentObjectives : [];
+      return arr
+        .filter((o) => o && !o.completed)
+        .map((o) => String(o?.text ?? "").trim())
+        .filter(Boolean)
+        .slice(0, limit);
+    }
+
+    async function miniImmersiveFallback() {
+      const role = String(scenario?.botPersona?.name || "interlocutor").trim();
+      const scene = String(scenario?.title || "escenario").trim();
+      const pending = getPendingObjectiveTexts(2);
+
+      const pendingBlock = pending.length
+        ? `Objetivo pendiente prioritario:\n- ${pending.join("\n- ")}`
+        : `Objetivo pendiente prioritario: (no especificado; igualmente guía para avanzar la conversación)`;
+
+      const prompt = `
+Eres ${role} en: "${scene}". Nivel del estudiante: ${level}.
+El estudiante ha dicho: "${String(userMessage || "").trim()}".
+
+${pendingBlock}
+
+TAREA:
+Escribe SOLO 1 intervención natural (máx. 2 frases cortas) que:
+- mantenga la ficción (no menciones objetivos, misión, sistema, JSON)
+- sea específica del contexto
+- haga UNA pregunta concreta para avanzar
+- si el mensaje del estudiante es ambiguo, pide el dato que falta de forma natural.
+
+Devuelve SOLO el texto, sin comillas, sin JSON, sin markdown.
+`.trim();
+
+      const url =
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+
+      let r;
+      try {
+        r = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 90
+            }
+          })
+        });
+      } catch {
+        return null;
+      }
+
+      let data;
+      try {
+        data = await r.json();
+      } catch {
+        return null;
+      }
+
+      if (!r.ok) return null;
+
+      const parts = data?.candidates?.[0]?.content?.parts ?? [];
+      const textRaw = parts.map((p) => p?.text ?? "").join("").trim();
+
+      const cleaned = String(textRaw || "")
+        .replace(/```[\s\S]*?```/g, "")
+        .replace(/^["']|["']$/g, "")
+        .trim();
+
+      // Evita que te devuelva algo tipo "Aquí tienes..."
+      if (!cleaned) return null;
+      if (cleaned.toLowerCase().includes("json")) return null;
+
+      return cleaned;
+    }
+
     function safeNormalizeParsed(parsed, fallbackText) {
       const reply =
         typeof parsed?.reply === "string" && parsed.reply.trim()
           ? parsed.reply.trim()
-          : (cleanModelText(fallbackText) || "Perdón, ¿puedes repetirlo?");
+          : cleanModelText(fallbackText);
 
       const ids = Array.isArray(parsed?.completed_objective_ids)
         ? parsed.completed_objective_ids.map((x) => String(x))
         : [];
 
-      return { reply, completed_objective_ids: ids };
+      return {
+        reply: reply || "", // si queda vacío lo resolvemos después
+        completed_objective_ids: ids
+      };
     }
 
     async function callGemini({ strict = false } = {}) {
@@ -215,23 +304,35 @@ PROHIBIDO:
       if (!out2.ok) {
         return res.status(out2.status).json({ error: "Gemini API error", details: out2.data });
       }
+
       jsonStr = extractJsonString(out2.textRaw);
 
       if (!jsonStr) {
+        const immersive = await miniImmersiveFallback();
         const fallbackReply = cleanModelText(out2.textRaw);
+
         return res.status(200).json({
-          reply: fallbackReply || "Perdón, ¿qué quieres hacer ahora?",
+          reply: immersive || fallbackReply || "Perdón 🙂 ¿Puedes concretarlo un poco más?",
           completed_objective_ids: []
         });
       }
 
       try {
         const parsed2 = JSON.parse(jsonStr);
-        return res.status(200).json(safeNormalizeParsed(parsed2, out2.textRaw));
+        const norm2 = safeNormalizeParsed(parsed2, out2.textRaw);
+
+        if (!norm2.reply || norm2.reply.length < 3) {
+          const immersive = await miniImmersiveFallback();
+          norm2.reply = immersive || "Perdón 🙂 ¿Puedes concretarlo un poco más?";
+        }
+
+        return res.status(200).json(norm2);
       } catch {
+        const immersive = await miniImmersiveFallback();
         const fallbackReply = cleanModelText(out2.textRaw);
+
         return res.status(200).json({
-          reply: fallbackReply || "Perdón, ¿qué quieres hacer ahora?",
+          reply: immersive || fallbackReply || "Perdón 🙂 ¿Puedes concretarlo un poco más?",
           completed_objective_ids: []
         });
       }
@@ -240,11 +341,20 @@ PROHIBIDO:
     // Parse del primer intento
     try {
       const parsed = JSON.parse(jsonStr);
-      return res.status(200).json(safeNormalizeParsed(parsed, out.textRaw));
+      const norm = safeNormalizeParsed(parsed, out.textRaw);
+
+      if (!norm.reply || norm.reply.length < 3) {
+        const immersive = await miniImmersiveFallback();
+        norm.reply = immersive || "Perdón 🙂 ¿Puedes concretarlo un poco más?";
+      }
+
+      return res.status(200).json(norm);
     } catch {
+      const immersive = await miniImmersiveFallback();
       const fallbackReply = cleanModelText(out.textRaw);
+
       return res.status(200).json({
-        reply: fallbackReply || "Perdón, ¿qué quieres hacer ahora?",
+        reply: immersive || fallbackReply || "Perdón 🙂 ¿Puedes concretarlo un poco más?",
         completed_objective_ids: []
       });
     }
