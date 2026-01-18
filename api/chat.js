@@ -369,11 +369,12 @@ if (isLowLevel) {
   const replyRaw = String(norm.reply || "").trim();
   const replyCore = replyRaw.toLowerCase().replace(/[.,!?¿¡]/g, "").trim();
 
-  const clearlyBad =
-    !replyRaw ||
-    isIrrelevantReply(replyRaw, userMessage) ||
-    ["hola", "claro", "vale", "ah", "ajá", "aja", "sí", "si", "ok", "buenas", "buenos días", "buenos dias"].includes(replyCore) ||
-    replyRaw.endsWith(",");
+const clearlyBad =
+  !replyRaw ||
+  replyRaw.length < 4 ||         
+  replyRaw.endsWith(",") ||      
+  isIrrelevantReply(replyRaw, userMessage) ||
+  ["hola", "claro", "vale", "ah", "ajá", "aja", "sí", "si", "ok"].includes(replyCore);
 
   if (!clearlyBad) {
     // ✅ A1/A2: si no es claramente malo, NO hacemos mini-call
