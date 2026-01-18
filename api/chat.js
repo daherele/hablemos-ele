@@ -359,6 +359,30 @@ Devuelve SOLO el texto, sin comillas, sin JSON, sin markdown.
       // No aumentamos llamadas: solo pedimos mini-call si detectamos “respuesta mala”
       let needsFallback = false;
 
+      // --- Early-exit por nivel (reduce mini-calls en A1/A2) ---
+const lvl = String(level || "").toUpperCase();
+const isLowLevel = lvl === "A1" || lvl === "A2";
+
+// Si es A1/A2, solo hacemos mini-call si es "claramente malo"
+// (vacío, irrelevante, o relleno muy típico)
+if (isLowLevel) {
+  const replyRaw = String(norm.reply || "").trim();
+  const replyCore = replyRaw.toLowerCase().replace(/[.,!?¿¡]/g, "").trim();
+
+  const clearlyBad =
+    !replyRaw ||
+    isIrrelevantReply(replyRaw, userMessage) ||
+    ["hola", "claro", "vale", "ah", "ajá", "aja", "sí", "si", "ok", "buenas", "buenos días", "buenos dias"].includes(replyCore) ||
+    replyRaw.endsWith(",");
+
+  if (!clearlyBad) {
+    // ✅ A1/A2: si no es claramente malo, NO hacemos mini-call
+    return norm;
+  }
+  // Si es claramente malo, seguimos con tus reglas normales (caerá en fallback)
+}
+
+
       if (!norm.reply) needsFallback = true;
 
       // 1) Respuesta débil o típica de relleno
