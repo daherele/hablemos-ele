@@ -56,19 +56,13 @@ async function postJSON(path, payload) {
 const callGeminiChat = async (history, scenario, level, userMessage, currentObjectives) => {
   try {
     const trimmedHistory = Array.isArray(history) ? history.slice(-6) : [];
-   const completed_objective_ids = Array.isArray(currentObjectives)
-  ? currentObjectives.filter(o => o?.completed).map(o => o.id)
-  : [];
-
-const data = await postJSON("/api/chat", {
-  history: trimmedHistory,
-  scenario,
-  level,
-  userMessage,
-  currentObjectives,
-  completed_objective_ids
-});
-
+    const data = await postJSON("/api/chat", {
+      history: trimmedHistory,
+      scenario,
+      level,
+      userMessage,
+      currentObjectives
+    });
 
     return {
       reply: typeof data?.reply === "string" ? data.reply : "No pude generar respuesta.",
